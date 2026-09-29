@@ -30,6 +30,13 @@ export interface Entry {
   ts: number;
   kind: EventKind;
   user: string;
+  /**
+   * Stable per-viewer key. Falls back to the nickname when the backend has no
+   * better handle, so a widget that keeps state per viewer always has a key —
+   * a less durable one, but never an empty one that would merge every
+   * anonymous viewer into a single entry.
+   */
+  userId: string;
   /** Bare payload. The verb belongs to the renderer, not the wire. */
   value: string;
   meta: Record<string, unknown>;
@@ -88,6 +95,12 @@ export interface WidgetType {
   blurb: string;
   /** Only one instance of a unique type may exist in a scene. */
   unique?: boolean;
+  /**
+   * The widget covers the whole scene rather than sitting in a positioned box.
+   * For anything that draws its own background or owns the whole frame — the
+   * astronaut canvas, for one — where x/y and scale have no meaning.
+   */
+  fill?: boolean;
   defaults: StyleMap;
   /** Kinds this widget subscribes to. A widget with none is a static display. */
   kinds: EventKind[];

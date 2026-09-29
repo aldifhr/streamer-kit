@@ -51,6 +51,25 @@ with TestClient(main.app) as client:
 
     check("missing overlay is 404", client.get("/api/overlays/nope").status_code == 404)
 
+    print("create from a template")
+    # The dashboard resolves a template to a full scene and posts it, so that
+    # creating an overlay is one request rather than create-then-save.
+    scene = {
+        "version": 2,
+        "theme": "cards",
+        "padding": 12,
+        "customCSS": "",
+        "global": {"fontSize": 16},
+        "widgets": [{"id": "chat-1", "type": "chat", "enabled": True, "x": 0, "y": 1, "scale": 1, "style": {}}],
+    }
+    tpl = client.post("/api/overlays", json={"name": "From template", "config": scene}).json()["overlay"]
+    check("template config stored verbatim", tpl["config"] == scene, json.dumps(tpl["config"]))
+    check("template theme projected", tpl["theme"] == "cards", tpl["theme"])
+    listed = {o["id"]: o for o in client.get("/api/overlays").json()["overlays"]}
+    check("template widgets visible in list",
+          listed[tpl["id"]]["config"]["widgets"][0]["type"] == "chat")
+    client.delete(f"/api/overlays/{tpl['id']}")
+
     print("username")
     patched = client.patch(f"/api/overlays/{oid}", json={"username": "@someone"}).json()["overlay"]
     check("username strips @", patched["username"] == "someone", patched["username"])
@@ -74,6 +93,11 @@ with TestClient(main.app) as client:
         pushed = ws.receive_json()
         check("alert reached socket", pushed["type"] == ALERT and pushed["title"] == "Hi", str(pushed))
 
+        print("trigger with a stable user key")
+        client.post(f"/api/overlays/{oid}/trigger", json={"kind": "follow", "user": "kei", "user_id": "kei_tiktok"})
+        keyed = ws.receive_json()
+        check("userId carried through", keyed["userId"] == "kei_tiktok", str(keyed))
+
         print("customizer clients also see config updates")
         client.post(f"/api/overlays/{oid}/config", json={"config": {"theme": "rail"}})
         pushed_cfg = ws.receive_json()
@@ -93,12 +117,26 @@ with TestClient(main.app) as client:
     check("delete twice is 404", client.delete(f"/api/overlays/{oid}").status_code == 404)
 
 print("wire format")
-check("comment wire unchanged", to_wire(Event(kind="comment", user="a", value="hi")) == {"type": "comment", "user": "a", "text": "hi"})
-check("like wire unchanged", to_wire(Event(kind="like", user="a", meta={"count": 2, "totalLikes": 9})) == {"type": "like", "user": "a", "count": 2, "totalLikes": 9})
-check("gift wire unchanged", to_wire(Event(kind="gift", user="a", meta={"giftName": "Rose", "count": 1, "value": 5})) == {"type": "gift", "user": "a", "giftName": "Rose", "count": 1, "value": 5})
-check("join wire unchanged", to_wire(Event(kind="join", user="a", meta={"viewers": 3})) == {"type": "join", "user": "a", "viewers": 3})
+check("comment wire unchanged", to_wire(Event(kind="comment", user="a", value="hi")) == {"type": "comment", "user": "a", "userId": "a", "text": "hi"})
+check("like wire unchanged", to_wire(Event(kind="like", user="a", meta={"count": 2, "totalLikes": 9})) == {"type": "like", "user": "a", "userId": "a", "count": 2, "totalLikes": 9})
+check("gift wire unchanged", to_wire(Event(kind="gift", user="a", meta={"giftName": "Rose", "count": 1, "value": 5})) == {"type": "gift", "user": "a", "userId": "a", "giftName": "Rose", "count": 1, "value": 5})
+check("join wire unchanged", to_wire(Event(kind="join", user="a", meta={"viewers": 3})) == {"type": "join", "user": "a", "userId": "a", "viewers": 3})
 check("viewers wire unchanged", to_wire(Event(kind="viewers", meta={"count": 12})) == {"type": "viewers", "count": 12})
 check("unknown kind surfaces as alert", to_wire(Event(kind="bogus"))["type"] == ALERT)
+
+# The astronaut widget keys persistent per-viewer state, so a missing user_id
+# has to degrade to the nickname rather than to an empty key that would merge
+# every anonymous viewer into one astronaut.
+check(
+    "user_id falls back to nickname",
+    to_wire(Event(kind="comment", user="kei", value="hi"))["userId"] == "kei",
+)
+check(
+    "explicit user_id wins",
+    to_wire(Event(kind="comment", user="kei", user_id="kei_tiktok", value="hi"))["userId"] == "kei_tiktok",
+)
+check("follow carries user_id", to_wire(Event(kind="follow", user="a", user_id="z"))["userId"] == "z")
+check("share carries user_id", to_wire(Event(kind="share", user="a", user_id="z"))["userId"] == "z")
 
 print()
 if failures:

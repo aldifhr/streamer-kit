@@ -11,8 +11,12 @@ const THEMES = [
 
 const FEATURES = [
   {
-    title: "Real TikTok Live chat",
-    body: "Comments, likes, gifts, follows and viewer count — streamed straight from the live room into your overlay.",
+    title: "Build it from widgets",
+    body: "Chat, big alert cards, a live viewer count, a goal bar, a caption strip — or a pixel-art scene where your viewers become astronauts. One URL shows the whole scene.",
+  },
+  {
+    title: "Real TikTok Live events",
+    body: "Comments, likes, gifts, joins, follows and shares — streamed straight from the live room, keyed to each viewer rather than to a nickname.",
   },
   {
     title: "No bot account",
@@ -23,12 +27,8 @@ const FEATURES = [
     body: "Paste one URL into a Browser Source. Works in OBS, Streamlabs, XSplit and anything else that renders a browser.",
   },
   {
-    title: "Themes & custom CSS",
-    body: "Start from a built-in theme, tweak every value point-and-click, or drop in your own stylesheet.",
-  },
-  {
-    title: "One URL per overlay",
-    body: "Each overlay gets its own link and its own config, so you can run several streams at once.",
+    title: "Fire alerts from anything",
+    body: "A built-in trigger, plus a webhook endpoint. A donation alert, a Stream Deck button or a cron job can put something on stream with no backend change.",
   },
   {
     title: "Auto-reconnecting",
@@ -37,8 +37,8 @@ const FEATURES = [
 ];
 
 const STEPS = [
-  { step: "01", title: "Create an overlay", body: "Name it and enter the TikTok username you stream under." },
-  { step: "02", title: "Connect & style it", body: "Go live, then pick a theme and adjust colours, fonts and layout." },
+  { step: "01", title: "Pick a starting point", body: "Choose a template — chat only, chat plus alerts, or the full kit — and enter your @username." },
+  { step: "02", title: "Arrange your widgets", body: "Move each widget, restyle it, or add more. Every value is adjustable." },
   { step: "03", title: "Paste into OBS", body: "Copy the overlay URL into a Browser Source and size it to your canvas." },
 ];
 
@@ -54,6 +54,10 @@ const FAQ = [
   {
     q: "Why is nothing showing in my overlay?",
     a: "Almost always because the streamer is not live yet. The overlay connects on its own and starts rendering as soon as the room goes live.",
+  },
+  {
+    q: "Can I test it without going live?",
+    a: "Yes. The editor has a test panel that fires any event straight into the overlay — a follow, a share, a gift of any size — so you can check an alert or a goal bar before a real stream.",
   },
   {
     q: "Can I run more than one overlay?",
@@ -114,14 +118,15 @@ export default function Home() {
             </span>
 
             <h1 className="text-balance text-5xl font-bold leading-[1.08] tracking-tight sm:text-7xl">
-              One overlay.
+              One URL.
               <br />
-              <span className="text-neutral-500">Every message.</span>
+              <span className="text-neutral-500">A whole overlay scene.</span>
             </h1>
 
             <p className="mx-auto mt-6 max-w-xl text-pretty text-lg leading-relaxed text-neutral-400">
-              Put your TikTok Live chat on stream in one clean overlay. No bots, no plugins — just a URL
-              you paste into OBS.
+              Build your TikTok Live overlay out of widgets — chat, alerts, viewer count, goals, or a
+              pixel-art scene your viewers walk around in. No bots, no plugins — just a URL you paste
+              into OBS.
             </p>
 
             <div className="mt-10 flex flex-col justify-center gap-3 sm:flex-row">
@@ -173,7 +178,8 @@ export default function Home() {
               Built for TikTok streamers
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-center text-neutral-500">
-              Everything you need to get chat on screen without touching your streaming setup.
+              Everything you need to build the overlay you actually want, without touching your
+              streaming setup.
             </p>
 
             <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -280,7 +286,7 @@ export default function Home() {
             </span>
             <span>StreamKit</span>
           </div>
-          <p>TikTok Live chat overlay</p>
+          <p>Widget-based TikTok Live overlay</p>
         </div>
       </footer>
     </div>

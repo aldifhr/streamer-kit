@@ -72,6 +72,13 @@ class ConnectRequest(BaseModel):
 
 class CreateOverlayRequest(BaseModel):
     name: str
+    #: Starting scene, resolved by the caller.
+    #:
+    #: The frontend owns the config schema deliberately — main.py mirrors only
+    #: the theme id, because a second copy of the schema here is how the two
+    # drift. Accepting the whole config keeps that ownership one-directional:
+    # the backend stores what it is given and never interprets it.
+    config: dict[str, Any] | None = None
 
 
 class UpdateOverlayRequest(BaseModel):
@@ -94,15 +101,24 @@ class TriggerRequest(BaseModel):
 
     kind: str = ALERT
     user: str = ""
+    #: Stable per-user key, for widgets that keep state per viewer. Defaults to
+    #: `user` so a caller that only knows a nickname still gets a key.
+    user_id: str = ""
     text: str = ""
     title: str = ""
     icon: str = "★"
+    #: Gift value and repeat count. Without these a triggered gift is worth
+    #: nothing, which makes the reward thresholds a widget might key on
+    #: impossible to exercise from the editor.
+    diamonds: int = 0
+    count: int = 1
 
 
 class HookRequest(BaseModel):
-    """External webhook body. Field names are matched case-insensitively."""
+    """External webhook body."""
 
     user: str = ""
+    user_id: str = ""
     text: str = ""
     title: str = ""
     icon: str = "★"
@@ -135,7 +151,8 @@ async def list_overlays():
 @router.post("/api/overlays")
 async def create_overlay(req: CreateOverlayRequest):
     name = req.name.strip() or "Untitled"
-    record = store.create_overlay(name, dict(DEFAULT_OVERLAY_CONFIG))
+    config = req.config if req.config is not None else dict(DEFAULT_OVERLAY_CONFIG)
+    record = store.create_overlay(name, config)
     return {"overlay": _summary(record["id"], record)}
 
 
@@ -261,8 +278,16 @@ async def trigger(overlay_id: str, req: TriggerRequest):
         Event(
             kind=req.kind,
             user=req.user,
+            user_id=req.user_id,
             value=req.text,
-            meta={"title": req.title, "icon": req.icon, "count": 1},
+            meta={
+                "title": req.title,
+                "icon": req.icon,
+                "count": req.count,
+                "giftName": req.text or "Gift",
+                "diamonds": req.diamonds,
+                "value": req.diamonds,
+            },
         ),
     )
     return {"status": "ok", "kind": req.kind}
@@ -288,6 +313,7 @@ async def webhook(overlay_id: str, req: HookRequest):
         Event(
             kind=req.kind,
             user=req.user,
+            user_id=req.user_id,
             value=value,
             meta={"title": req.title, "icon": req.icon, "count": 1},
         ),

@@ -13,25 +13,44 @@ import type { Entry, EventKind } from "@/lib/widgets/types";
  */
 const FROM_WIRE: Record<
   string,
-  (d: Record<string, unknown>) => { kind: EventKind; user: string; value: string; meta: Record<string, unknown> }
+  (d: Record<string, unknown>) => {
+    kind: EventKind;
+    user: string;
+    userId: string;
+    value: string;
+    meta: Record<string, unknown>;
+  }
 > = {
-  comment: (d) => ({ kind: "comment", user: String(d.user), value: String(d.text), meta: {} }),
-  like: (d) => ({ kind: "like", user: String(d.user), value: `x${d.count}`, meta: { totalLikes: d.totalLikes } }),
+  comment: (d) => ({ kind: "comment", user: String(d.user), userId: id(d), value: String(d.text), meta: {} }),
+  like: (d) => ({ kind: "like", user: String(d.user), userId: id(d), value: `x${d.count}`, meta: { totalLikes: d.totalLikes } }),
   gift: (d) => ({
     kind: "gift",
     user: String(d.user),
+    userId: id(d),
     value: `${d.giftName} x${d.count}`,
     meta: { diamonds: d.value },
   }),
-  join: (d) => ({ kind: "join", user: String(d.user), value: "", meta: { viewers: d.viewers } }),
-  follow: (d) => ({ kind: "follow", user: String(d.user), value: "", meta: {} }),
-  share: (d) => ({ kind: "share", user: String(d.user), value: d.count ? `+${d.count}` : "", meta: {} }),
+  join: (d) => ({ kind: "join", user: String(d.user), userId: id(d), value: "", meta: { viewers: d.viewers } }),
+  follow: (d) => ({ kind: "follow", user: String(d.user), userId: id(d), value: "", meta: {} }),
+  share: (d) => ({ kind: "share", user: String(d.user), userId: id(d), value: d.count ? `+${d.count}` : "", meta: {} }),
   alert: (d) => ({
     kind: "alert",
     user: String(d.user ?? ""),
+    userId: id(d),
     value: String(d.text ?? ""),
     meta: { title: d.title ?? "", icon: d.icon ?? "★" },
   }),
+};
+
+/**
+ * The backend sends a stable handle as `userId` and already falls back to the
+ * nickname server-side, so the only case left to cover here is a payload that
+ * carries neither.
+ */
+const id = (d: Record<string, unknown>): string => {
+  const stable = d.userId;
+  if (typeof stable === "string" && stable) return stable;
+  return typeof d.user === "string" ? d.user : "anon";
 };
 
 /**
@@ -141,8 +160,7 @@ export function useFeed(overlayId: string): Feed {
         seq.current += 1;
         setEntries((prev) =>
           [{ ...parsed, id: `${seq.current}`, seq: seq.current, ts: Date.now() }, ...prev].slice(0, BUFFER_MAX),
-        );
-      };
+        );      };
 
       ws.onclose = () => {
         if (disposed) return;

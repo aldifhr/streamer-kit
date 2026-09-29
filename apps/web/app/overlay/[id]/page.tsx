@@ -20,9 +20,25 @@ function Widget({ widget, config, feed }: { widget: WidgetInstance; config: Scen
   const style = useMemo(() => resolveSurface(resolve(widget)), [widget]);
   if (!type) return null;
 
-  const { x, y } = widget;
   const { Component } = type;
 
+  // A fill widget owns the whole frame, so placement and scale are meaningless
+  // for it and only its own size knobs apply.
+  if (type.fill) {
+    return (
+      <div className="sk-widget sk-widget-fill" data-glow={style.glow === true ? "on" : undefined}>
+        <Component
+          style={style}
+          global={config.global}
+          entries={feed.entries}
+          viewers={feed.viewers}
+          sceneId={widget.id}
+        />
+      </div>
+    );
+  }
+
+  const { x, y } = widget;
   return (
     <div
       className="sk-widget"

@@ -37,20 +37,30 @@ MANUAL_KINDS = (FOLLOW, SHARE, ALERT)
 class Event:
     kind: str
     user: str = ""
+    #: Stable per-user handle where the source can supply one. Distinct from
+    #: `user`, which is a display nickname: a nickname can change and two
+    #: people can share one, so anything that keys state per viewer (the
+    #: astronaut widget's persistent roster, for one) needs this instead.
+    user_id: str = ""
     #: Bare payload, no verb attached. "sent Rose x1", not "kei sent Rose x1" —
     #: the verb is a presentation concern and belongs in the renderer.
     value: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
 
+def _named(e: Event) -> dict[str, Any]:
+    """The user fields every per-viewer event carries."""
+    return {"user": e.user, "userId": e.user_id or e.user}
+
+
 def _comment(e: Event) -> dict[str, Any]:
-    return {"type": COMMENT, "user": e.user, "text": e.value}
+    return {"type": COMMENT, **_named(e), "text": e.value}
 
 
 def _like(e: Event) -> dict[str, Any]:
     return {
         "type": LIKE,
-        "user": e.user,
+        **_named(e),
         "count": e.meta.get("count", 1),
         "totalLikes": e.meta.get("totalLikes", 0),
     }
@@ -59,7 +69,7 @@ def _like(e: Event) -> dict[str, Any]:
 def _gift(e: Event) -> dict[str, Any]:
     return {
         "type": GIFT,
-        "user": e.user,
+        **_named(e),
         "giftName": e.meta.get("giftName", "Gift"),
         "count": e.meta.get("count", 1),
         "value": e.meta.get("value", 0),
@@ -67,7 +77,7 @@ def _gift(e: Event) -> dict[str, Any]:
 
 
 def _join(e: Event) -> dict[str, Any]:
-    return {"type": JOIN, "user": e.user, "viewers": e.meta.get("viewers", 0)}
+    return {"type": JOIN, **_named(e), "viewers": e.meta.get("viewers", 0)}
 
 
 def _viewers(e: Event) -> dict[str, Any]:
@@ -75,11 +85,11 @@ def _viewers(e: Event) -> dict[str, Any]:
 
 
 def _follow(e: Event) -> dict[str, Any]:
-    return {"type": FOLLOW, "user": e.user}
+    return {"type": FOLLOW, **_named(e)}
 
 
 def _share(e: Event) -> dict[str, Any]:
-    return {"type": SHARE, "user": e.user, "count": e.meta.get("count", 1)}
+    return {"type": SHARE, **_named(e), "count": e.meta.get("count", 1)}
 
 
 def _alert(e: Event) -> dict[str, Any]:

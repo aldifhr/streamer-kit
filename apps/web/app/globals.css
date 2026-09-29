@@ -43,6 +43,22 @@ body {
   transform-origin: top left;
 }
 
+/* A fill widget owns the whole frame, so it is pinned to the scene's edges
+   rather than placed at a fractional offset. */
+.sk-widget-fill {
+  position: absolute;
+  inset: 0;
+  transform: none;
+}
+
+.sk-astro-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 /* A widget with a glow knob gets one box-shadow value, inherited by the cards
    inside it. Set as a single var rather than per rule so the value lives in one
    place. */

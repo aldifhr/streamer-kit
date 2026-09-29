@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Stream-Kit",
-  description: "TikTok Live Overlay",
+  description: "Widget-based TikTok Live overlay",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

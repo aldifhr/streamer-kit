@@ -21,7 +21,7 @@ const SAMPLE: { kind: EventKind; user: string; value: string }[] = [
 ];
 
 const asEntries = (): Entry[] =>
-  SAMPLE.map((s, i) => ({ ...s, id: String(i), seq: i, ts: 0, meta: {} }));
+  SAMPLE.map((s, i) => ({ ...s, id: String(i), seq: i, ts: 0, userId: s.user, meta: {} }));
 
 export function ThemeSwatch({ theme }: { theme: Theme }) {
   const global: GlobalStyle = { ...DEFAULT_GLOBAL, ...theme.global };

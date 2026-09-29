@@ -241,12 +241,23 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     }));
   }, []);
 
-  const addWidget = useCallback((type: string) => {
-    const widget = makeWidget(type);
-    setConfig((prev) => ({ ...prev, widgets: [...prev.widgets, widget] }));
-    setSelected(widget.id);
-    setSection("widgets");
-  }, []);
+  const addWidget = useCallback(
+    (type: string) => {
+      const def = widgetType(type);
+      if (!def) return;
+      // A unique widget is one that cannot be sensibly stacked on itself: two
+      // astronaut scenes would both be full-canvas and would draw over each
+      // other, and two viewer counts in the same corner is a layout mistake
+      // rather than a choice. The second one is refused, and the button is
+      // disabled below so the refusal is visible before the click.
+      if (def.unique && config.widgets.some((w) => w.type === type)) return;
+      const widget = makeWidget(type);
+      setConfig((prev) => ({ ...prev, widgets: [...prev.widgets, widget] }));
+      setSelected(widget.id);
+      setSection("widgets");
+    },
+    [config.widgets],
+  );
 
   const removeWidget = useCallback((id: string) => {
     setConfig((prev) => {
@@ -530,16 +541,22 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                 {section === "widgets" && (
                   <div className="space-y-4">
                     <div className="flex flex-wrap gap-1.5">
-                      {WIDGET_LIST.map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => addWidget(t.id)}
-                          className="rounded-lg border border-white/15 px-2.5 py-1.5 text-xs text-neutral-300 transition hover:bg-white/5 hover:text-white"
-                        >
-                          <span className="mr-1">{t.icon}</span>
-                          {t.label}
-                        </button>
-                      ))}
+                      {WIDGET_LIST.map((t) => {
+                        // Already in the scene, and this type allows only one.
+                        const taken = t.unique && config.widgets.some((w) => w.type === t.id);
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => addWidget(t.id)}
+                            disabled={taken}
+                            title={taken ? `${t.label} is already in this scene` : t.blurb}
+                            className="rounded-lg border border-white/15 px-2.5 py-1.5 text-xs text-neutral-300 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:border-white/5 disabled:text-neutral-700"
+                          >
+                            <span className="mr-1">{t.icon}</span>
+                            {t.label}
+                          </button>
+                        );
+                      })}
                     </div>
 
                     <div className="space-y-1.5 border-t border-white/10 pt-4">
@@ -590,35 +607,40 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                           <p className="text-xs text-neutral-500">{activeType.blurb}</p>
                         </div>
 
-                        <div className="space-y-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-600">
-                            Position
-                          </p>
-                          <Field label={`Horizontal — ${Math.round(activeWidget.x * 100)}%`}>
-                            <Range
-                              min={0}
-                              max={100}
-                              value={Math.round(activeWidget.x * 100)}
-                              onChange={(v) => patchWidget(activeWidget.id, { x: v / 100 })}
-                            />
-                          </Field>
-                          <Field label={`Vertical — ${Math.round(activeWidget.y * 100)}%`}>
-                            <Range
-                              min={0}
-                              max={100}
-                              value={Math.round(activeWidget.y * 100)}
-                              onChange={(v) => patchWidget(activeWidget.id, { y: v / 100 })}
-                            />
-                          </Field>
-                          <Field label={`Scale — ${activeWidget.scale.toFixed(2)}x`}>
-                            <Range
-                              min={30}
-                              max={300}
-                              value={Math.round(activeWidget.scale * 100)}
-                              onChange={(v) => patchWidget(activeWidget.id, { scale: v / 100 })}
-                            />
-                          </Field>
-                        </div>
+                        {/* A fill widget owns the whole frame, so placement has
+                            no meaning for it and offering the sliders would
+                            only produce settings that do nothing. */}
+                        {activeType.fill ? null : (
+                          <div className="space-y-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-600">
+                              Position
+                            </p>
+                            <Field label={`Horizontal — ${Math.round(activeWidget.x * 100)}%`}>
+                              <Range
+                                min={0}
+                                max={100}
+                                value={Math.round(activeWidget.x * 100)}
+                                onChange={(v) => patchWidget(activeWidget.id, { x: v / 100 })}
+                              />
+                            </Field>
+                            <Field label={`Vertical — ${Math.round(activeWidget.y * 100)}%`}>
+                              <Range
+                                min={0}
+                                max={100}
+                                value={Math.round(activeWidget.y * 100)}
+                                onChange={(v) => patchWidget(activeWidget.id, { y: v / 100 })}
+                              />
+                            </Field>
+                            <Field label={`Scale — ${activeWidget.scale.toFixed(2)}x`}>
+                              <Range
+                                min={30}
+                                max={300}
+                                value={Math.round(activeWidget.scale * 100)}
+                                onChange={(v) => patchWidget(activeWidget.id, { scale: v / 100 })}
+                              />
+                            </Field>
+                          </div>
+                        )}
 
                         <WidgetForm
                           groups={activeType.groups}

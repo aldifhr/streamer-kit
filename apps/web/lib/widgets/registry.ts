@@ -7,6 +7,7 @@
  */
 
 import { alertsWidget } from "./alerts";
+import { astroWidget } from "./astro/widget";
 import { chatWidget } from "./chat";
 import { goalWidget } from "./goal";
 import { textWidget } from "./text";
@@ -19,12 +20,14 @@ export const WIDGET_TYPES: Record<string, WidgetType> = {
   viewers: viewersWidget,
   goal: goalWidget,
   text: textWidget,
+  astro: astroWidget,
 };
 
 /** Registration order, which is also the order the "add widget" menu lists. */
 export const WIDGET_LIST: WidgetType[] = [
   chatWidget,
   alertsWidget,
+  astroWidget,
   viewersWidget,
   goalWidget,
   textWidget,

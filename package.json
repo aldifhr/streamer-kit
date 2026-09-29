@@ -8,7 +8,10 @@
     "dev": "npm run dev --workspace=apps/web",
     "dev:api": "cd apps/api && python main.py",
     "build": "npm run build --workspace=apps/web",
-    "start": "npm run start --workspace=apps/web"
+    "start": "npm run start --workspace=apps/web",
+    "test:api": "cd apps/api && python test_api.py",
+    "test:astro": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-engine.cjs",
+    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json"
   },
   "devDependencies": {
     "typescript": "^5.4.0"

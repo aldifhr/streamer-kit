@@ -29,6 +29,17 @@ def display_name(user: Any) -> str | None:
     return nickname
 
 
+def display_id(user: Any) -> str:
+    """TikTok's stable per-user handle, aliased to `username` by the lib.
+
+    Falls back to the nickname so a widget that keys state per viewer still
+    gets a key, just a less durable one.
+    """
+    if user is None:
+        return ""
+    return (getattr(user, "username", "") or "").strip()
+
+
 class TikTokSource:
     def __init__(self, username: str, overlay_id: str) -> None:
         self.username = username
@@ -97,7 +108,15 @@ class TikTokSource:
             name = display_name(event.user)
             if not name:
                 return
-            dispatch(self.overlay_id, Event(kind=COMMENT, user=name, value=event.comment))
+            dispatch(
+                self.overlay_id,
+                Event(
+                    kind=COMMENT,
+                    user=name,
+                    user_id=display_id(event.user),
+                    value=event.comment,
+                ),
+            )
 
         @self._client.on(LikeEvent)
         async def on_like(event):
@@ -106,7 +125,12 @@ class TikTokSource:
                 return
             dispatch(
                 self.overlay_id,
-                Event(kind=LIKE, user=name, meta={"count": event.count, "totalLikes": event.total}),
+                Event(
+                    kind=LIKE,
+                    user=name,
+                    user_id=display_id(event.user),
+                    meta={"count": event.count, "totalLikes": event.total},
+                ),
             )
 
         @self._client.on(GiftEvent)
@@ -121,6 +145,7 @@ class TikTokSource:
                 Event(
                     kind=GIFT,
                     user=name,
+                    user_id=display_id(event.user),
                     meta={
                         "giftName": event.gift.name or "Gift",
                         "count": event.repeat_count,
@@ -139,7 +164,12 @@ class TikTokSource:
                 return
             dispatch(
                 self.overlay_id,
-                Event(kind=JOIN, user=name, meta={"viewers": event.member_count}),
+                Event(
+                    kind=JOIN,
+                    user=name,
+                    user_id=display_id(event.user),
+                    meta={"viewers": event.member_count},
+                ),
             )
 
         @self._client.on(RoomUserSeqEvent)
@@ -154,7 +184,10 @@ class TikTokSource:
             name = display_name(event.user)
             if not name:
                 return
-            dispatch(self.overlay_id, Event(kind=FOLLOW, user=name))
+            dispatch(
+                self.overlay_id,
+                Event(kind=FOLLOW, user=name, user_id=display_id(event.user)),
+            )
 
         @self._client.on(ShareEvent)
         async def on_share(event):
@@ -166,7 +199,12 @@ class TikTokSource:
             joined = event.users_joined
             dispatch(
                 self.overlay_id,
-                Event(kind=SHARE, user=name, meta={"count": joined} if joined else {}),
+                Event(
+                    kind=SHARE,
+                    user=name,
+                    user_id=display_id(event.user),
+                    meta={"count": joined} if joined else {},
+                ),
             )
 
         try:

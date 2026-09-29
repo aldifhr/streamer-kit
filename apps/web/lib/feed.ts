@@ -117,16 +117,20 @@ export function useFeed(overlayId: string): Feed {
 
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    let ws: WebSocket | null = null;
 
     const open = () => {
       if (disposed) return;
-      const ws = new WebSocket(url);
+      // Held in a local as well as the outer `ws`, so the handlers below cannot
+      // be tripped up by cleanup nulling it out from under them.
+      const sock = new WebSocket(url);
+      ws = sock;
 
-      ws.onopen = () => {
+      sock.onopen = () => {
         attempt = 0;
       };
 
-      ws.onmessage = (event) => {
+      sock.onmessage = (event) => {
         const data = JSON.parse(event.data) as Record<string, unknown>;
         const type = String(data.type);
 
@@ -157,12 +161,21 @@ export function useFeed(overlayId: string): Feed {
         const build = FROM_WIRE[type];
         if (!build) return;
         const parsed = build(data);
-        seq.current += 1;
-        setEntries((prev) =>
-          [{ ...parsed, id: `${seq.current}`, seq: seq.current, ts: Date.now() }, ...prev].slice(0, BUFFER_MAX),
-        );      };
 
-      ws.onclose = () => {
+        // The id and the sequence have to be read here, not inside the
+        // updater. React defers updater functions to the render phase, so a ref
+        // read there would see whatever value the ref has by then — which meant
+        // two messages batched into one render both produced the same id, and
+        // the same seq. Duplicate keys, and a merge sort with nothing to sort
+        // by.
+        seq.current += 1;
+        const n = seq.current;
+        const entry: Entry = { ...parsed, id: `${n}`, seq: n, ts: Date.now() };
+
+        setEntries((prev) => [entry, ...prev].slice(0, BUFFER_MAX));
+      };
+
+      sock.onclose = () => {
         if (disposed) return;
         // Back off so a backend that is down does not get hammered, and so a
         // restart is picked up without the user touching anything.
@@ -170,7 +183,7 @@ export function useFeed(overlayId: string): Feed {
         retry = setTimeout(open, Math.min(1000 * attempt, 10000));
       };
 
-      ws.onerror = () => ws.close();
+      sock.onerror = () => sock.close();
     };
 
     open();
@@ -178,6 +191,17 @@ export function useFeed(overlayId: string): Feed {
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      // The socket has to be closed, not just flagged. Leaving it open keeps
+      // its onmessage attached to this component's setState, so a remount —
+      // which StrictMode does deliberately on every mount in development —
+      // leaves two live sockets both pushing into the same buffer, and every
+      // message lands twice.
+      if (ws) {
+        ws.onclose = null;
+        ws.onmessage = null;
+        ws.close();
+        ws = null;
+      }
     };
   }, [overlayId]);
 

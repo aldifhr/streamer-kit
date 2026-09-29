@@ -33,12 +33,11 @@ interface Poll {
   mine: string | null;
 }
 
-function Polls({ style, sceneId }: WidgetProps) {
+function Polls({ style, overlayId }: WidgetProps) {
   const showResults = bool(style, "show-results", true);
   const showBar = bool(style, "show-bar", true);
   const [poll, setPoll] = useState<Poll | null>(null);
   const [busy, setBusy] = useState(false);
-  const seq = useRef(0);
   const loaded = useRef(false);
 
   useEffect(() => {
@@ -46,15 +45,14 @@ function Polls({ style, sceneId }: WidgetProps) {
     loaded.current = true;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneId]);
+  }, [overlayId]);
 
   async function load() {
     try {
-      const res = await apiFetch(`/api/polls/${sceneId}`);
+      const res = await apiFetch(`/api/polls/${overlayId}`);
       if (!res.ok) return;
       const body = (await res.json()) as Poll;
       if (!body || !Array.isArray(body.options)) return;
-      seq.current += 1;
       setPoll(body);
     } catch {
       /* no poll configured, or the API is down: nothing to draw */
@@ -68,7 +66,7 @@ function Polls({ style, sceneId }: WidgetProps) {
     if (!poll || poll.mine !== null || busy) return;
     setBusy(true);
     try {
-      const res = await apiFetch(`/api/polls/${sceneId}/vote?choice=${index}`);
+      const res = await apiFetch(`/api/polls/${overlayId}/vote?choice=${index}`);
       if (res.ok) {
         const body = (await res.json()) as Poll;
         setPoll(body);
@@ -87,7 +85,7 @@ function Polls({ style, sceneId }: WidgetProps) {
     const timer = setInterval(() => void load(), 4000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneId]);
+  }, [overlayId]);
 
   if (!poll || !poll.options?.length) return null;
 

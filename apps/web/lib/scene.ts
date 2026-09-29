@@ -303,14 +303,38 @@ export function normaliseScene(raw: unknown): SceneConfig {
     scene.global = { ...DEFAULT_GLOBAL, ...(source.global as GlobalStyle) };
   }
 
-  const widgets = source.widgets
-    .map(normaliseWidget)
-    .filter((w): w is WidgetInstance => w !== null);
+  const widgets = dedupeIds(
+    source.widgets
+      .map(normaliseWidget)
+      .filter((w): w is WidgetInstance => w !== null),
+  );
 
   // A scene whose only widgets were of an unknown type would render as an empty
   // screen in OBS, which is much harder to diagnose than a fresh chat.
   scene.widgets = widgets.length > 0 ? widgets : [makeWidget("chat")];
   return scene;
+}
+
+/**
+ * Give any duplicate id a fresh one.
+ *
+ * Ids saved by an older build came from a counter that restarted on every page
+ * load, so a config can legitimately contain the same id twice. `sceneId` is what
+ * the counter widgets reset on and what the streaks table is stored under, so a
+ * duplicate is not cosmetic: two widgets would share a total. The first keeps the
+ * id, because that is the one whose persisted state already exists.
+ */
+function dedupeIds(widgets: WidgetInstance[]): WidgetInstance[] {
+  const seen = new Set<string>();
+  return widgets.map((w) => {
+    if (!seen.has(w.id)) {
+      seen.add(w.id);
+      return w;
+    }
+    const replacement = { ...w, id: newWidgetId(w.type) };
+    seen.add(replacement.id);
+    return replacement;
+  });
 }
 
 /** Every widget of a type that is not already `exceptId`. */

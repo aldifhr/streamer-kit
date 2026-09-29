@@ -57,7 +57,18 @@ function Widget({
         transform: `translate(${placement(widget.x, widget.y)}) scale(${widget.scale})`,
       }}
     >
-      <Component style={style} global={scene.global} entries={entries} viewers={viewers} sceneId={widget.id} />
+      <Component
+        style={style}
+        global={scene.global}
+        entries={entries}
+        viewers={viewers}
+        sceneId={widget.id}
+        // The landing page renders a sample scene with no overlay behind it, so
+        // there is nothing real to key a poll by. A fixed placeholder is honest
+        // here: the poll widget resolves it to a 404 from the sample backend and
+        // draws nothing, which is what a sample scene should show anyway.
+        overlayId="sample"
+      />
     </div>
   );
 }

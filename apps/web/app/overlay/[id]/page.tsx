@@ -16,7 +16,17 @@ function placement(x: number, y: number): string {
   return `${dx}, ${dy}`;
 }
 
-function Widget({ widget, config, feed }: { widget: WidgetInstance; config: SceneConfig; feed: Feed }) {
+function Widget({
+  widget,
+  config,
+  feed,
+  overlayId,
+}: {
+  widget: WidgetInstance;
+  config: SceneConfig;
+  feed: Feed;
+  overlayId: string;
+}) {
   const type = widgetType(widget.type);
   const style = useMemo(() => resolveSurface(resolve(widget)), [widget]);
   if (!type) return null;
@@ -34,6 +44,7 @@ function Widget({ widget, config, feed }: { widget: WidgetInstance; config: Scen
           entries={feed.entries}
           viewers={feed.viewers}
           sceneId={widget.id}
+          overlayId={overlayId}
         />
       </div>
     );
@@ -59,6 +70,7 @@ function Widget({ widget, config, feed }: { widget: WidgetInstance; config: Scen
         entries={feed.entries}
         viewers={feed.viewers}
         sceneId={widget.id}
+          overlayId={overlayId}
       />
     </div>
   );
@@ -88,7 +100,17 @@ export default function Scene({ params }: { params: Promise<{ id: string }> }) {
       {config
         ? config.widgets
             .filter((w) => w.enabled)
-            .map((w) => <Widget key={w.id} widget={w} config={config} feed={feed} />)
+            .map(
+              (w) => (
+                <Widget
+                  key={w.id}
+                  widget={w}
+                  config={config}
+                  feed={feed}
+                  overlayId={overlayId}
+                />
+              ),
+            )
         : null}
 
       {feed.error ? (

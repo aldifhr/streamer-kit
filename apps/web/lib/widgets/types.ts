@@ -86,6 +86,12 @@ export interface WidgetProps {
   viewers: number | null;
   /** Scene-level identity, for widgets that need a stable id (goal progress). */
   sceneId: string;
+  /**
+   * The overlay's own id, which is not the widget's. The poll needs it: the
+   * backend keys polls by overlay so one question survives a scene edit, and a
+   * poll fetched by widget id could never match the one the editor created.
+   */
+  overlayId: string;
 }
 
 export interface WidgetType {
@@ -163,8 +169,24 @@ export interface CustomiserProps {
 }
 
 let seq = 0;
-/** Monotonic, collision-free, and valid as a DOM id. */
+/**
+ * An id that stays unique across reloads.
+ *
+ * A module counter alone is not enough, and the previous version claimed to be
+ * collision-free when it was not: `seq` restarts at zero on every page load, so
+ * the first widget added in a new session gets the same id as the first one
+ * added in the last. Two widgets of the same type in one scene could then share
+ * an id, and because `sceneId` is what the counter widgets reset on and what the
+ * streaks table is keyed by, a duplicate means a shared key and a shared total.
+ *
+ * The random suffix is what makes it safe past reloads; the counter is kept so
+ * two widgets added in the same breath still differ and stay readable.
+ */
 export function newWidgetId(type: string): string {
   seq += 1;
-  return `${type}-${seq.toString(36)}`;
+  const unique =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${type}-${seq.toString(36)}-${unique}`;
 }

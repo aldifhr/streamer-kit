@@ -1,0 +1,29 @@
+{
+  "overlay": {
+    "width": 800,
+    "height": 600,
+    "backgroundColor": "transparent",
+    "alertDuration": 5000,
+    "maxVisibleAlerts": 5,
+    "position": "bottom-right",
+    "fontFamily": "Arial, sans-serif",
+    "fontSize": 24,
+    "textColor": "#ffffff",
+    "backgroundColor": "rgba(0, 0, 0, 0.7)",
+    "borderRadius": 12,
+    "padding": 16,
+    "animation": "slide-in",
+    "showComments": true,
+    "showLikes": true,
+    "showGifts": true,
+    "showFollows": true,
+    "showViewers": true,
+    "commentThreshold": 100,
+    "likeThreshold": 50,
+    "giftThreshold": 1,
+    "followThreshold": 1,
+    "viewerInterval": 30,
+    "alertSounds": false,
+    "customCSS": ""
+  }
+}

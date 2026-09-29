@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-surface-900 text-white min-h-screen;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Overlay surface
+ *
+ * Every visual decision the overlay makes is a CSS custom property, injected
+ * at runtime by `toCssVars()` in lib/config.ts. Rules below only describe
+ * *structure*; nothing here hard-codes a colour, size or font. That keeps
+ * themes to a single set of var values and gives users a real CSS API —
+ * `--sk-font-size` and friends are all documented targets for custom CSS.
+ * ---------------------------------------------------------------------------
+ */
+.sk-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  font-family: var(--sk-font-family);
+  font-size: var(--sk-font-size);
+  font-weight: var(--sk-font-weight);
+  line-height: var(--sk-line-height);
+  letter-spacing: var(--sk-letter-spacing);
+  color: var(--sk-text-color);
+  padding: 12px;
+}
+
+/* Newest message is first in the array; column-reverse pins it to the bottom
+   so there is no scroll maths to maintain as messages expire. Spacing is
+   per-type margins rather than one `gap`, so chat and events can be tuned
+   independently; the newest item is the first child, so its trailing margin
+   is zeroed to avoid dead space under the stack. */
+.sk-list {
+  display: flex;
+  flex-direction: column-reverse;
+  max-width: var(--sk-chat-max-width);
+  overflow: hidden;
+}
+
+.sk-list > :first-child {
+  margin-bottom: 0;
+}
+
+/* --- chat line (comments) ------------------------------------------------ */
+.sk-chat {
+  /* inline hugs the text, bubble fills the column */
+  align-self: var(--sk-chat-align);
+  margin-bottom: var(--sk-chat-gap);
+  max-width: 100%;
+  border-radius: var(--sk-chat-radius);
+  background: var(--sk-chat-bg);
+  padding: var(--sk-chat-pad-y) var(--sk-chat-pad-x);
+  word-break: break-word;
+  animation: sk-in 140ms ease-out;
+}
+
+.sk-username {
+  font-family: var(--sk-username-font-family);
+  font-size: var(--sk-username-font-size);
+  font-weight: var(--sk-username-font-weight);
+  text-transform: var(--sk-username-transform);
+  text-shadow: var(--sk-text-shadow);
+  display: var(--sk-show-username);
+  white-space: nowrap;
+}
+
+/* Per-user colour paints the name only. A per-row tint (all-chat's
+   --row-user-bg) is deliberately not reproduced: with hashed per-user colours
+   it turns every comment into a solid pastel block. */
+.sk-text {
+  color: var(--sk-text-color);
+  text-shadow: var(--sk-text-shadow);
+}
+
+/* --- event card (like / gift / join) -------------------------------------
+   Always a full-width card regardless of the chat layout toggle: an alert
+   reads as a distinct object, which is the whole point of separating them. */
+.sk-event {
+  align-self: stretch;
+  margin-bottom: var(--sk-event-gap);
+  max-width: 100%;
+  border-radius: var(--sk-event-radius);
+  background: var(--sk-event-bg);
+  border: var(--sk-event-border-width) solid var(--sk-event-border-color);
+  box-shadow: inset var(--sk-event-accent) 0 0 var(--sk-accent-color),
+    var(--sk-event-glow);
+  padding: var(--sk-event-pad-y) var(--sk-event-pad-x);
+  margin-left: var(--sk-event-indent);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  word-break: break-word;
+  animation: sk-in 140ms ease-out;
+}
+
+.sk-event-icon {
+  flex-shrink: 0;
+  font-size: var(--sk-event-icon-size);
+  line-height: 1;
+  display: var(--sk-show-icons);
+}
+
+.sk-event-title {
+  font-weight: var(--sk-event-title-weight);
+  white-space: nowrap;
+  text-shadow: var(--sk-text-shadow);
+}
+
+.sk-event-value {
+  font-weight: var(--sk-event-value-weight);
+  color: var(--sk-text-color);
+  text-shadow: var(--sk-text-shadow);
+}
+
+/* Visibility is a var, so the message handler never branches on config. */
+.sk-chat[data-kind="comment"] { display: var(--sk-show-comments); }
+.sk-event[data-kind="like"] { display: var(--sk-show-likes); }
+.sk-event[data-kind="gift"] { display: var(--sk-show-gifts); }
+.sk-event[data-kind="join"] { display: var(--sk-show-joins); }
+
+@keyframes sk-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.app {
+  @apply flex min-h-screen;
+}
+

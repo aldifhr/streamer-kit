@@ -1,0 +1,16 @@
+{
+  "name": "stream-kit",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/web",
+    "dev:api": "cd apps/api && python main.py",
+    "build": "npm run build --workspace=apps/web",
+    "start": "npm run start --workspace=apps/web"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

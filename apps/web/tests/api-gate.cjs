@@ -296,6 +296,31 @@ async function main() {
     check("an unconfigured gate refuses writes", anon.status === 503, `got ${anon.status}`);
   });
 
+  console.log("the poll is reachable without a session, so OBS can vote");
+  // The poll widget renders on /overlay/{id}, which OBS loads and which cannot
+  // log in. It votes through this proxy, so if the gate covered the poll the vote
+  // button would silently do nothing and the backend's open GET /vote would never
+  // be reached.
+  await withServer({}, async () => {
+    const read = await req("/api/polls/ov1");
+    check("reading a poll needs no session", read.status === 502, `got ${read.status}`);
+
+    const vote = await req("/api/polls/ov1/vote?choice=0");
+    check("voting needs no session", vote.status === 502, `got ${vote.status}`);
+
+    // The exemption is for the read and the vote, not for the writes. Creating a
+    // poll is how an overlay gets a question, and it stays behind the gate.
+    const create = await req("/api/polls/ov1", { method: "POST", body: { question: "Q", options: ["a"] } });
+    check("creating a poll still needs a session", create.status === 401, `got ${create.status}`);
+
+    const drop = await req("/api/polls/ov1", { method: "DELETE" });
+    check("deleting a poll still needs a session", drop.status === 401, `got ${drop.status}`);
+
+    // And it is scoped to /polls: a GET elsewhere is still closed.
+    const other = await req("/api/overlays");
+    check("an unrelated read is still closed", other.status === 401, `got ${other.status}`);
+  });
+
   console.log("the overlay stays reachable without a login");
   // OBS loads this page on the streamer's machine and cannot log in. If this
   // were gated the browser source would sit on a login screen forever, which is

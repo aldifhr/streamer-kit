@@ -34,8 +34,11 @@ function load(key: string): Record<string, Streak> {
   }
 }
 
-function Streaks({ style, entries }: WidgetProps) {
-  const storageKey = str(style, "storage", "streamkit:streaks");
+function Streaks({ style, entries, sceneId }: WidgetProps) {
+  // Per scene, and it has to be: the streak table is persisted, so a global key
+  // would carry the last room's top talkers onto this room's board. `topgifts`
+  // scopes its key the same way.
+  const storageKey = str(style, "storage", "") || `streamkit:streaks:${sceneId}`;
   const gapMs = num(style, "reset-after", 90) * 1000;
   const max = num(style, "max", 8);
   const minStreak = num(style, "min", 2);

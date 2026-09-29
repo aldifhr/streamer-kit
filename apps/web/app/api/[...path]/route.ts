@@ -43,6 +43,26 @@ const token = process.env.STREAMKIT_API_TOKEN?.trim();
 
 type Params = { params: Promise<{ path: string[] }> };
 
+/**
+ * The one API path a signed-out caller may reach.
+ *
+ * The poll widget renders on /overlay/{id}, which OBS loads and which cannot log
+ * in. It votes through this proxy, and the proxy refuses everything without a
+ * session — so without this exemption the vote button silently does nothing and
+ * the backend's deliberately open `GET /vote` is never reached. The widget polls
+ * the same path every four seconds for its own state, so the read is open too.
+ *
+ * Narrow on purpose: GET only, and only under /polls. Creating and closing a
+ * poll stay behind the session — those are writes, and the method check is what
+ * stops `POST /polls/x` from riding in on the back of this. A future vote POST
+ * would have to be listed here explicitly rather than inherit access.
+ */
+function isPublicPoll(request: NextRequest): boolean {
+  if (request.method !== "GET") return false;
+  const path = request.nextUrl.pathname;
+  return /^\/api\/polls\/[^/]+(?:\/vote)?$/.test(path);
+}
+
 async function proxy(request: NextRequest, { params }: Params): Promise<Response> {
   // Fail closed. A deployment with no password set would otherwise be as open as
   // it was before the gate, and it would look like it was protected.
@@ -52,7 +72,7 @@ async function proxy(request: NextRequest, { params }: Params): Promise<Response
       headers: { "content-type": "application/json" },
     });
   }
-  if (!(await hasSession(request))) {
+  if (!(await hasSession(request)) && !isPublicPoll(request)) {
     return new Response(JSON.stringify({ detail: "Not signed in" }), {
       status: 401,
       headers: { "content-type": "application/json" },

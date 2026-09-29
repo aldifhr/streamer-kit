@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { globalVars, resolveSurface, styleProps, type StyleMap } from "@/lib/css";
 import { resolve, type SceneConfig, type WidgetInstance } from "@/lib/scene";
 import { WIDGET_TYPES } from "@/lib/widgets/registry";
@@ -62,24 +62,42 @@ function Widget({
   );
 }
 
+/** The scene is composed at this size and scaled down to fit. */
+const CANVAS_W = 1920;
+const CANVAS_H = 1080;
+
 /**
  * Renders at true 1920x1080 and scales down, exactly as the editor's canvas
  * does. Laying the widgets out at the size they will actually be seen is the
- * whole point — a mock laid out at 800px would misplace everything.
+ * whole point — a mock laid out at panel size would misplace everything.
+ *
+ * The scale is measured from the container rather than passed in, so the
+ * preview is correct at any width instead of overflowing on a narrow screen.
  */
 export function ScenePreview({
   scene,
-  scale,
   entries = SAMPLE,
   viewers = 1284,
   className = "",
 }: {
   scene: SceneConfig;
-  scale: number;
   entries?: Entry[];
   viewers?: number | null;
   className?: string;
 }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const measure = () => setWidth(el.clientWidth);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const widgets = useMemo(
     () =>
       scene.widgets
@@ -88,26 +106,27 @@ export function ScenePreview({
     [scene],
   );
 
+  const scale = width > 0 ? width / CANVAS_W : 0;
+
   return (
-    <div
-      className={`relative overflow-hidden ${className}`}
-      style={{ width: 1920 * scale, height: 1080 * scale }}
-    >
-      <div
-        className="sk-root"
-        style={{ width: 1920, height: 1080, padding: scene.padding, transform: `scale(${scale})` }}
-      >
-        <style>{`:root{${globalVars(scene.global)}}`}</style>
-        {widgets.map(({ widget, style }) => (
-          <Widget
-            key={widget.id}
-            widget={widget}
-            scene={scene}
-            style={style}
-            entries={entries}
-            viewers={viewers}
-          />
-        ))}
+    <div ref={boxRef} className={`relative w-full overflow-hidden ${className}`}>
+      <div style={{ height: CANVAS_H * scale }}>
+        <div
+          className="sk-root sk-root-embed"
+          style={{ width: CANVAS_W, height: CANVAS_H, padding: scene.padding, transform: `scale(${scale})` }}
+        >
+          <style>{`:root{${globalVars(scene.global)}}`}</style>
+          {widgets.map(({ widget, style }) => (
+            <Widget
+              key={widget.id}
+              widget={widget}
+              scene={scene}
+              style={style}
+              entries={entries}
+              viewers={viewers}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

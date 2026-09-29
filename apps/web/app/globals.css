@@ -38,6 +38,15 @@ body {
   color: var(--sk-text-color);
 }
 
+/* Embedded, the scene has to be clipped to whatever box it was put in.
+   `fixed` is right for the overlay page — it *is* the whole frame — but reused
+   as a preview it becomes a full-viewport layer that slides over the page
+   instead of scrolling with it. */
+.sk-root-embed {
+  position: absolute;
+  transform-origin: top left;
+}
+
 .sk-widget {
   position: absolute;
   transform-origin: top left;

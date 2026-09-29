@@ -135,7 +135,7 @@ export default function Home() {
                   <span className="h-2.5 w-2.5 rounded-full border border-white/20" />
                   <span className="ml-2 font-mono text-[10px] text-neutral-600">Browser Source</span>
                 </div>
-                <ScenePreview scene={heroScene()} scale={0.31} className="w-full" />
+                <ScenePreview scene={heroScene()} />
               </div>
               <p className="mt-3 text-center text-xs text-neutral-600">
                 Chat, alerts, a viewer count and a goal bar — one scene, one URL.

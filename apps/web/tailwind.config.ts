@@ -4,6 +4,10 @@ const config: Config = {
   content: [
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    // The editor and every widget live under lib/, not app/. Without this the
+    // layout classes that appear only there are never generated, and the editor
+    // renders as one unstyled column with no preview pane.
+    "./lib/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     extend: {

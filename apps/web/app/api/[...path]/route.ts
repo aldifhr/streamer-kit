@@ -1,10 +1,23 @@
 /**
- * Proxy for `/api/*`.
+ * Proxy for `/api/*`, behind a password gate.
  *
  * The API rejects unauthenticated writes, and the browser must not be the thing
  * holding that token: anything in the client bundle is readable by anyone who
  * loads the page. So writes are proxied through here, and the token is attached
  * to the outgoing request on the server, where it never reaches the client.
+ *
+ * That arrangement has a consequence worth stating plainly, because it is the
+ * bug this gate exists to fix. A token the server attaches *on demand*
+ * authenticates nobody — it makes every anonymous caller privileged. Verified
+ * against the deployed app: with no gate, an unauthenticated POST to this route
+ * created overlays, rewrote configs and pointed a live stream at a different
+ * room, all with the stream's authority. The token was safe and the door was
+ * open, which is the worst of both.
+ *
+ * So the session is checked *here*, before the token is ever attached. A caller
+ * that has not logged in gets a 401 and no upstream request is made. Reading a
+ * session cookie is not the strong part of this; the strong part is that
+ * attaching the token is conditional on it.
  *
  * This exists instead of a `rewrites()` entry with a `headers` property because
  * Next does not accept one — `headers` is not in the allowed key set for a
@@ -18,6 +31,7 @@
  */
 
 import { NextRequest } from "next/server";
+import { hasSession } from "../session/route";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +44,21 @@ const token = process.env.STREAMKIT_API_TOKEN?.trim();
 type Params = { params: Promise<{ path: string[] }> };
 
 async function proxy(request: NextRequest, { params }: Params): Promise<Response> {
+  // Fail closed. A deployment with no password set would otherwise be as open as
+  // it was before the gate, and it would look like it was protected.
+  if (!process.env.STREAMKIT_PASSWORD?.trim()) {
+    return new Response(JSON.stringify({ detail: "STREAMKIT_PASSWORD is not set" }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  if (!(await hasSession(request))) {
+    return new Response(JSON.stringify({ detail: "Not signed in" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   const { path } = await params;
   const target = new URL(`${backend}/api/${path.join("/")}`);
   target.search = request.nextUrl.search;

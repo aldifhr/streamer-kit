@@ -46,5 +46,10 @@ export function wsUrl(path: string): string {
  * one path and cannot forget to.
  */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(path, init);
+  // The session cookie is set on this origin by /api/session, so it rides along
+  // only if credentials are included. Same-origin is the default in modern
+  // browsers, but the gate makes it load-bearing rather than incidental, so it
+  // is stated rather than assumed — a future change to cross-origin calls must
+  // keep it, and this is the line that says so.
+  return fetch(path, { credentials: "same-origin", ...init });
 }

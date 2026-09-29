@@ -4,6 +4,7 @@ import { use, useEffect, useMemo, type CSSProperties } from "react";
 import { globalVars, resolveSurface, styleProps } from "@/lib/css";
 import { useFeed, type Feed } from "@/lib/feed";
 import { resolve, type SceneConfig, type WidgetInstance } from "@/lib/scene";
+import { safeCustomCSS } from "@/lib/safe-css";
 import { widgetType } from "@/lib/widgets/registry";
 
 /** Where a widget sits before the user moves it. Fractions, not pixels. */
@@ -78,7 +79,9 @@ export default function Scene({ params }: { params: Promise<{ id: string }> }) {
   return (
     <div className="sk-root" style={{ padding: config?.padding ?? 12 }}>
       <style>{config ? `:root{${globalVars(config.global)}}` : ""}</style>
-      {config?.customCSS ? <style dangerouslySetInnerHTML={{ __html: config.customCSS }} /> : null}
+      {config?.customCSS ? (
+        <style dangerouslySetInnerHTML={{ __html: safeCustomCSS(config.customCSS) }} />
+      ) : null}
 
       {/* The scene renders nothing until its config has arrived, rather than
           flashing a default layout that OBS would capture. */}

@@ -31,7 +31,9 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState(TEMPLATES[1].id);
+  // Named rather than indexed, so reordering the list cannot silently change
+  // what a new overlay starts as.
+  const [template, setTemplate] = useState("chat-alerts");
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);

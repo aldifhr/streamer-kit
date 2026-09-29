@@ -104,69 +104,61 @@ export interface Theme {
   widgets: Record<string, StyleMap>;
 }
 
+/**
+ * The surface keys every chrome-ish widget shares, so a theme can be written
+ * once and applied to the chat, the alert cards, the viewer chip, the goal bar
+ * and the caption strip together.
+ *
+ * Earlier versions of this only carried `chat`, which meant picking a theme
+ * visibly did nothing to every other widget in the scene — the exact feeling
+ * of "the theme is broken" when you only wanted the space scene restyled.
+ *
+ * The astronaut widget is deliberately absent: it draws its own artwork and has
+ * no surface to tint.
+ */
+type Surface = Partial<
+  Pick<
+    StyleMap,
+    "bg" | "bg-opacity" | "radius" | "pad-x" | "pad-y" | "border-w" | "border-color" | "accent"
+  >
+>;
+
+const SURFACED = ["chat", "alerts", "viewers", "goal", "text"] as const;
+
+function theme(id: string, name: string, global: Partial<GlobalStyle>, surface: Surface, extra: Record<string, StyleMap> = {}): Theme {
+  const widgets: Record<string, StyleMap> = {};
+  for (const type of SURFACED) widgets[type] = { ...surface };
+  // Per-widget values win, so a theme can still set chat-only or alert-only
+  // knobs after the shared surface has been laid down.
+  for (const [type, style] of Object.entries(extra)) {
+    widgets[type] = { ...(widgets[type] ?? {}), ...style };
+  }
+  return { id, name, global, widgets };
+}
+
 /** Compact-and-clean presets: tight chat, quiet cards. */
 export const THEMES: Theme[] = [
-  {
-    id: "streamline",
-    name: "Streamline",
-    global: {},
-    widgets: { chat: { "pad-x": 6, "pad-y": 2, gap: 3, "card-bg-opacity": 48, accent: 2 } },
-  },
-  {
-    id: "quiet",
-    name: "Quiet",
-    global: {},
-    widgets: {
-      chat: { "bg-opacity": 34, radius: 8, "pad-x": 12, "pad-y": 6, gap: 6, "card-bg-opacity": 40, accent: 0 },
-    },
-  },
-  {
-    id: "rail",
-    name: "Rail",
-    global: {},
-    widgets: { chat: { "bg-opacity": 58, accent: 3, "card-bg-opacity": 62 } },
-  },
-  {
-    id: "cards",
-    name: "Cards",
-    global: {},
-    widgets: {
-      chat: {
-        align: "stretch",
-        "bg-opacity": 40,
-        radius: 12,
-        "pad-x": 14,
-        "pad-y": 8,
-        gap: 6,
-        "card-radius": 12,
-        "card-pad-x": 14,
-        "card-pad-y": 9,
-        "card-bg-opacity": 70,
-      },
-    },
-  },
-  {
-    id: "outline",
-    name: "Outline",
-    global: { fontSize: 16, lineHeight: 1.3 },
-    widgets: {
-      chat: {
-        "bg-opacity": 0,
-        "pad-x": 4,
-        "pad-y": 1,
-        gap: 2,
-        "card-bg-opacity": 0,
-        "border-w": 1,
-        "border-color": "#ffffff",
-      },
-    },
-  },
-  {
-    id: "contrast",
-    name: "High Contrast",
-    global: { fontSize: 16 },
-    widgets: { chat: { "bg-opacity": 78, "card-bg-opacity": 85, "border-w": 1 } },
-  },
+  theme("streamline", "Streamline", {}, { "pad-x": 6, "pad-y": 2, radius: 5, "bg-opacity": 0, accent: 2 }, {
+    chat: { gap: 3, "card-bg-opacity": 48, "card-radius": 8 },
+    alerts: { gap: 8, "card-pad-y": 10, "card-pad-x": 16 },
+  }),
+  theme("quiet", "Quiet", {}, { "bg-opacity": 34, radius: 8, "pad-x": 12, "pad-y": 6, accent: 0 }, {
+    chat: { gap: 6, "card-bg-opacity": 40, "card-radius": 8 },
+    alerts: { gap: 10 },
+  }),
+  theme("rail", "Rail", {}, { "bg-opacity": 58, radius: 6, accent: 3 }, {
+    chat: { "card-bg-opacity": 62 },
+  }),
+  theme("cards", "Cards", {}, { "bg-opacity": 40, radius: 12, "pad-x": 14, "pad-y": 8 }, {
+    chat: { align: "stretch", gap: 6, "card-bg-opacity": 70, "card-radius": 12, "card-pad-x": 14, "card-pad-y": 9 },
+  }),
+  theme("outline", "Outline", { fontSize: 16, lineHeight: 1.3 }, { "bg-opacity": 0, radius: 4, "pad-x": 4, "pad-y": 1, "border-w": 1, "border-color": "#ffffff" }, {
+    chat: { gap: 2, "card-bg-opacity": 0 },
+    goal: { "bg-opacity": 0 },
+  }),
+  theme("contrast", "High Contrast", { fontSize: 16 }, { "bg-opacity": 78, radius: 8, "border-w": 1, "border-color": "#ffffff" }, {
+    chat: { "card-bg-opacity": 85 },
+  }),
 ];
 
 /* -------------------------------------------------------------------------

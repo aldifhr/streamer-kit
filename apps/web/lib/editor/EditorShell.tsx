@@ -65,7 +65,10 @@ const NAV: { group: string; items: { id: SectionId; label: string; keys: string[
 ];
 
 const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
-  theme: { title: "Theme", blurb: "A starting point. Every widget stays adjustable after this." },
+  theme: {
+    title: "Theme",
+    blurb: "Restyles the chat widget and the scene's shared typography. Each widget keeps its own controls.",
+  },
   channel: { title: "Channel", blurb: "Point this overlay at a TikTok Live room. It connects on its own." },
   widgets: { title: "Widgets", blurb: "What this overlay is made of, and where each piece sits." },
   typography: { title: "Typography", blurb: "Shared by every widget. Per-widget sizes live under the widget." },
@@ -390,16 +393,39 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-black text-white">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-5">
-        <div className="flex items-center gap-3 text-sm">
-          <Link href="/dashboard" className="text-neutral-500 transition hover:text-white">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-5">
+        <div className="flex min-w-0 items-center gap-3 text-sm">
+          <Link href="/dashboard" className="shrink-0 text-neutral-500 transition hover:text-white">
             Dashboard
           </Link>
-          <span className="text-neutral-700">/</span>
-          <span className="font-medium">{username ? `@${username}` : "Unnamed channel"}</span>
+          <span className="shrink-0 text-neutral-700">/</span>
+          <span className="shrink-0 font-medium">{username ? `@${username}` : "Unnamed channel"}</span>
+
+          {/* What this scene is actually made of, on every tab.
+              Without this the editor opens on Theme — whose previews are always
+              chat — so an astronaut or goal scene looks like a chat overlay
+              until you go looking for the Widgets section. */}
+          <span className="hidden min-w-0 items-center gap-1.5 border-l border-white/10 pl-3 lg:flex">
+            {config.widgets.map((w) => {
+              const t = widgetType(w.type);
+              if (!t) return null;
+              return (
+                <span
+                  key={w.id}
+                  title={`${t.label} — ${t.blurb}`}
+                  className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] ${
+                    w.enabled ? "bg-white/5 text-neutral-400" : "bg-white/[0.02] text-neutral-700 line-through"
+                  }`}
+                >
+                  <span className="mr-1">{t.icon}</span>
+                  {t.label}
+                </span>
+              );
+            })}
+          </span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {dirty ? (
             <button
               onClick={() => void commit()}
@@ -482,25 +508,36 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
 
               <div className="space-y-4 pb-4">
                 {section === "theme" && (
-                  <div className="grid gap-2.5">
-                    {THEMES.map((t) => (
-                      <button
-                        key={t.id}
-                        onClick={() => applyTheme(t.id)}
-                        className={`overflow-hidden rounded-lg border text-left transition ${
-                          config.theme === t.id ? "border-white/60" : "border-white/10 hover:border-white/30"
-                        }`}
-                      >
-                        <ThemeSwatch theme={t} />
-                        <span className="flex items-center justify-between border-t border-white/5 px-4 py-2.5">
-                          <span className="text-xs font-medium">{t.name}</span>
-                          {config.theme === t.id ? (
-                            <span className="text-[10px] text-neutral-500">Active</span>
-                          ) : null}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <>
+                    <div className="grid gap-2.5">
+                      {THEMES.map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => applyTheme(t.id)}
+                          className={`overflow-hidden rounded-lg border text-left transition ${
+                            config.theme === t.id ? "border-white/60" : "border-white/10 hover:border-white/30"
+                          }`}
+                        >
+                          <ThemeSwatch theme={t} />
+                          <span className="flex items-center justify-between border-t border-white/5 px-4 py-2.5">
+                            <span className="text-xs font-medium">{t.name}</span>
+                            {config.theme === t.id ? (
+                              <span className="text-[10px] text-neutral-500">Active</span>
+                            ) : null}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* The preview is the chat widget because that is what a theme
+                        carries. Saying so beats letting a user conclude their
+                        astronaut or goal scene ignored the theme. */}
+                    <p className="border-t border-white/10 pt-4 text-xs leading-relaxed text-neutral-600">
+                      The preview above is the chat widget, which is what a theme restyles. Widgets
+                      that draw their own artwork keep it — pick a theme for the mood, then adjust
+                      each widget under <span className="text-neutral-500">Widgets</span>.
+                    </p>
+                  </>
                 )}
 
                 {section === "channel" && (

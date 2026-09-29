@@ -564,7 +564,7 @@ export function createAstroEngine(opts: {
     if (showLabel) {
       const nm = sanitize(a.name).slice(0, 10) || "VIEWER";
       label(
-        `${nm} L${levelFor(a.xp)}`,
+        `${nm} Lv${levelFor(a.xp)}`,
         R(a.x),
         R(a.y) + 12,
         isTop ? "#ffd23f" : a.sleeping ? "#a9a7d0" : "#ffffff",

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { apiFetch } from "@/lib/api";
 import { normaliseScene } from "@/lib/scene";
 import { TEMPLATES, sceneFromTemplate } from "@/lib/templates";
 import { WIDGET_LIST, widgetType } from "@/lib/widgets/registry";
@@ -75,7 +76,7 @@ export default function Dashboard() {
     if (!trimmed || creating) return;
     setCreating(true);
     try {
-      const res = await fetch("/api/overlays", {
+      const res = await apiFetch("/api/overlays", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // The scene is resolved here and posted whole, so creating an overlay is
@@ -95,7 +96,7 @@ export default function Dashboard() {
   };
 
   const remove = async (id: string) => {
-    await fetch(`/api/overlays/${id}`, { method: "DELETE" }).catch(() => {});
+    await apiFetch(`/api/overlays/${id}`, { method: "DELETE" }).catch(() => {});
     setOverlays((prev) => prev.filter((o) => o.id !== id));
   };
 

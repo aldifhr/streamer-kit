@@ -28,6 +28,28 @@ from fastapi.testclient import TestClient  # noqa: E402
 import main  # noqa: E402
 from events import ALERT, Event, to_wire  # noqa: E402
 
+def as_entries():
+    return []
+
+
+def _socket_attaches(client) -> bool:
+    """A WebSocket attach must survive the token guard.
+
+    OBS loads the overlay page and it cannot send a header, so if the socket
+    were guarded the overlay would render nothing at all — the failure mode
+    would be a silently blank browser source.
+    """
+    made = client.post("/api/overlays", json={"name": "Sock"}, headers={"x-streamkit-token": "s3cret"})
+    if made.status_code != 200:
+        return False
+    oid = made.json()["overlay"]["id"]
+    try:
+        with client.websocket_connect(f"/ws/overlay/{oid}") as ws:
+            return ws.receive_json().get("type") == "config"
+    except Exception:
+        return False
+
+
 failures: list[str] = []
 
 
@@ -137,6 +159,55 @@ check(
 )
 check("follow carries user_id", to_wire(Event(kind="follow", user="a", user_id="z"))["userId"] == "z")
 check("share carries user_id", to_wire(Event(kind="share", user="a", user_id="z"))["userId"] == "z")
+
+print("token guard")
+# Everything above ran with no token set, which must stay open so a fresh clone
+# works with no setup. Now turn one on and check what it actually covers.
+os.environ["STREAMKIT_TOKEN"] = "s3cret"
+try:
+    with TestClient(main.app) as guarded:
+        # Reading has to stay open: the overlay page is loaded by OBS, which
+        # cannot send a header, and it needs the list and the stream to render.
+        check("read is open with a token set", guarded.get("/api/overlays").status_code == 200)
+        check(
+            "socket attach is open with a token set",
+            _socket_attaches(guarded),
+            "ws handshake rejected",
+        )
+
+        check("create without a token is 401", guarded.post("/api/overlays", json={"name": "x"}).status_code == 401)
+        check("delete without a token is 401", guarded.delete("/api/overlays/whatever").status_code == 401)
+        check("connect without a token is 401", guarded.post("/api/connect", json={"username": "x"}).status_code == 401)
+        check("trigger without a token is 401", guarded.post("/api/overlays/x/trigger", json={}).status_code == 401)
+        check("hook without a token is 401", guarded.post("/api/hooks/x", json={}).status_code == 401)
+
+        bad = {"x-streamkit-token": "wrong"}
+        check("create with a wrong token is 401", guarded.post("/api/overlays", json={"name": "x"}, headers=bad).status_code == 401)
+
+        good = {"x-streamkit-token": "s3cret"}
+        made = guarded.post("/api/overlays", json={"name": "Guarded"}, headers=good)
+        check("create with the right token works", made.status_code == 200, made.text)
+        if made.status_code == 200:
+            gid = made.json()["overlay"]["id"]
+            # Checked before the delete, since a 404 here would mean the guard is
+            # masking the route's own not-found behaviour rather than passing.
+            check(
+                "trigger with the right token works",
+                guarded.post(f"/api/overlays/{gid}/trigger", json={}, headers=good).status_code == 200,
+            )
+            check(
+                "hook with the right token works",
+                guarded.post(f"/api/hooks/{gid}", json={}, headers=good).status_code == 200,
+            )
+            check("delete with the right token works", guarded.delete(f"/api/overlays/{gid}", headers=good).status_code == 200)
+
+        # The query form is what a browser source in OBS has to fall back on.
+        check(
+            "token also accepted as a query param",
+            guarded.get("/api/overlays?token=s3cret").status_code == 200,
+        )
+finally:
+    os.environ.pop("STREAMKIT_TOKEN", None)
 
 print()
 if failures:

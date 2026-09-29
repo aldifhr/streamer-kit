@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { API_ORIGIN, wsUrl } from "@/lib/api";
+import { apiFetch, wsUrl } from "@/lib/api";
 import { normaliseScene, sceneLifetime, type SceneConfig } from "@/lib/scene";
 import type { Entry, EventKind } from "@/lib/widgets/types";
 
@@ -107,7 +107,7 @@ export function useFeed(overlayId: string): Feed {
 
         // This page is what OBS loads, so it owns the connection. The endpoint
         // is idempotent per (overlay, username), so the editor can call it too.
-        fetch(`${API_ORIGIN}/api/connect`, {
+        apiFetch("/api/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username: data.username, overlay_id: overlayId }),

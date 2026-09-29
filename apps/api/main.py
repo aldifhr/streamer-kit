@@ -8,12 +8,14 @@ does not mean editing the file that owns routing.
 
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import events
@@ -49,12 +51,77 @@ app = FastAPI(title="StreamKit", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
+    # The frontend is served from a different origin than this API, so it has to
+    # be reachable cross-origin. Credentials are never used, which is what makes
+    # "*" acceptable here.
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 router = APIRouter()
+
+
+# --------------------------------------------------------------------------
+# authorisation
+#
+# A deployed API is public. Without a token anyone could delete a stream's
+# overlays, rewrite its config, or post a fake 999-diamond gift that permanently
+# advances the astronaut roster. Read and stream access stays open on purpose:
+# the overlay page is loaded by OBS, which cannot send a header, and it needs the
+# event stream to render at all.
+# --------------------------------------------------------------------------
+
+#: Read from the API's environment. Unset means open, so local development and a
+#: fresh clone keep working with no setup. Read per call rather than cached at
+#: import so a test — and a future config reload — can change it without
+#: reimporting the module.
+def api_token() -> str:
+    return os.environ.get("STREAMKIT_TOKEN", "").strip()
+
+
+def _presented_token(request: Request) -> str:
+    header = request.headers.get("x-streamkit-token", "")
+    if header:
+        return header
+    # Query form, for the one caller that cannot set headers: the browser source
+    # URL in OBS. It is a real trade-off — the token then lands in OBS logs and
+    # screenshots — so it is only a fallback, never the preferred path.
+    return request.query_params.get("token", "")
+
+
+def token_is_valid(request: Request) -> bool:
+    expected = api_token()
+    if not expected:
+        return True
+    header = request.headers.get("x-streamkit-token", "")
+    if header == expected:
+        return True
+    # Query form, for the one caller that cannot set headers: the browser source
+    # URL in OBS. It is a real trade-off — the token then lands in OBS logs and
+    # screenshots — so it is only a fallback, never the preferred path.
+    return request.query_params.get("token", "") == expected
+
+
+@app.middleware("http")
+async def guard_mutations(request: Request, call_next):
+    """Reject unauthenticated writes.
+
+    A method check rather than a path list, so a new mutating route is protected
+    the moment it is added instead of the day someone remembers to add it. The
+    WebSocket path is exempt because it is not an HTTP request in the first
+    place, and because OBS cannot authenticate at all.
+
+    The rejection is returned rather than raised: an HTTPException thrown from
+    middleware is not routed through the exception handlers, so it would surface
+    as an unhandled error instead of a 401.
+    """
+    if request.method in ("POST", "PATCH", "PUT", "DELETE") and not token_is_valid(request):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing STREAMKIT_TOKEN"},
+        )
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { API_ORIGIN, wsUrl } from "@/lib/api";
+import { apiFetch, wsUrl } from "@/lib/api";
 import { DEFAULT_GLOBAL, type StyleMap, type StyleValue } from "@/lib/css";
 import {
   THEMES,
@@ -158,7 +158,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch(`/api/overlays/${overlayId}/config`, {
+      const res = await apiFetch(`/api/overlays/${overlayId}/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ config }),
@@ -280,7 +280,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     async (next: string) => {
       const trimmed = next.trim().replace(/^@/, "");
       setUsername(trimmed);
-      await fetch(`/api/overlays/${overlayId}`, {
+      await apiFetch(`/api/overlays/${overlayId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: trimmed }),
@@ -295,7 +295,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     setError(null);
     try {
       await saveUsername(username);
-      const res = await fetch(`${API_ORIGIN}/api/connect`, {
+      const res = await apiFetch("/api/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), overlay_id: overlayId }),
@@ -324,7 +324,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   );
 
   const disconnect = useCallback(async () => {
-    const res = await fetch(`${API_ORIGIN}/api/disconnect`, {
+    const res = await apiFetch("/api/disconnect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ overlay_id: overlayId }),

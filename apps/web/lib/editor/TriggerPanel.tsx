@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { apiFetch } from "@/lib/api";
 import { inputCls } from "./controls";
 
 const PRESETS: { kind: string; icon: string; label: string; text: string; title: string }[] = [
@@ -41,7 +42,7 @@ export function TriggerPanel({ overlayId }: { overlayId: string }) {
   const fire = async (body: Record<string, unknown>) => {
     setBusy(true);
     try {
-      const res = await fetch(`/api/overlays/${overlayId}/trigger`, {
+        const res = await apiFetch(`/api/overlays/${overlayId}/trigger`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

@@ -52,10 +52,19 @@ global.localStorage = {
 let clock = 0;
 global.performance = { now: () => clock };
 
-const timers = [];
+const timers = new Map();
+let nextTimer = 1;
 global.setInterval = (fn) => {
-  timers.push(fn);
-  return timers.length;
+  const id = nextTimer++;
+  timers.set(id, fn);
+  return id;
+};
+// Tracked as real handles, because a timer that is never cleared is the bug this
+// file now guards against: a bare `setInterval` in the engine outlived
+// `destroy()` and kept writing the roster. A stub that only collects callbacks
+// cannot see that, so this one has to model removal.
+global.clearInterval = (id) => {
+  timers.delete(id);
 };
 
 let frameHandles = new Map();
@@ -167,59 +176,98 @@ engine.configure({ ...cfg, space: false, pixelSize: 3, censors: false });
 engine.resize(1920, 1080);
 
 // A joined viewer exists without having said anything.
-const joined = entry(++seq, "join", "joiner", "joiner", "", { viewers: 100 });
-engine.handle(joined);
+engine.handle(entry(++seq, "join", "joiner", "joiner", "", { viewers: 5087 }));
 drawCalls = 0;
 runFrames(3);
-const withJoin = drawCalls;
-check("join puts an astronaut on screen", withJoin > 300, `draws=${withJoin}`);
+check("join puts an astronaut on screen", drawCalls > 300, `draws=${drawCalls}`);
 
-// Fill the room, then report a much smaller audience. drawCalls per frame scales
-// with the roster, so a real drop shows up as fewer draws.
-for (let i = 0; i < 12; i++) {
-  engine.handle(entry(++seq, "join", `guest${i}`, `guest${i}`, "", { viewers: 100 }));
+// The real shape of a busy room: thousands of viewers, a roster capped in the
+// tens. A couple of people leaving has to register, and a rounding wobble must
+// not cost anyone their place.
+const liveRoom = 5087;
+const rosterSize = 20;
+for (let i = 0; i < rosterSize; i++) {
+  engine.handle(entry(++seq, "join", `guest${i}`, `guest${i}`, "", { viewers: liveRoom }));
 }
-engine.handle(entry(++seq, "viewers", "", "", "", { count: 500 }));
+engine.handle(entry(++seq, "viewers", "", "", "", { count: liveRoom }));
 drawCalls = 0;
 runFrames(3);
 const full = drawCalls;
 
-engine.handle(entry(++seq, "viewers", "", "", "", { count: 100 }));
+engine.handle(entry(++seq, "viewers", "", "", "", { count: liveRoom - 3 }));
 drawCalls = 0;
 runFrames(3);
-const afterDrop = drawCalls;
-check("a falling viewer count retires astronauts", afterDrop < full, `full=${full} after=${afterDrop}`);
+const afterThreeLeft = drawCalls;
+check("three leavers retire three, in a 5000-viewer room", afterThreeLeft < full,
+  `full=${full} after=${afterThreeLeft}`);
 
-// A count that wobbles by one is noise, not a room emptying, and must not cost
-// anyone their place.
-engine.handle(entry(++seq, "viewers", "", "", "", { count: 500 }));
+engine.handle(entry(++seq, "viewers", "", "", "", { count: liveRoom }));
 drawCalls = 0;
 runFrames(3);
 const restored = drawCalls;
-engine.handle(entry(++seq, "viewers", "", "", "", { count: 499 }));
+engine.handle(entry(++seq, "viewers", "", "", "", { count: liveRoom - 1 }));
 drawCalls = 0;
 runFrames(3);
-check("a one-view wobble retires nobody", drawCalls === restored, `wobble=${drawCalls} base=${restored}`);
+check("a one-view wobble retires nobody", drawCalls === restored,
+  `wobble=${drawCalls} base=${restored}`);
+
+console.log("leaving the scene is not losing your rank");
+// Only a viewer who has earned something is in the saved roster at all: a join
+// on its own grants no XP, so there is nothing to write. This is the real
+// traffic — people who chat, like and gift.
+engine.handle(entry(++seq, "comment", "regular", "regular", "halo", {}));
+engine.handle(entry(++seq, "like", "regular", "regular", "", { count: 3 }));
+runFrames(2);
+// Nothing is written yet: the engine batches to disk on its own timer, so the
+// in-memory roster is the only thing holding this. `dirty` is what makes the
+// next persist happen, and the checks below read the file only after a teardown
+// forces the write.
+check("a viewer who has earned something is saved", store.size > 0, `inMemory=${store.size}`);
+
+engine.handle(entry(++seq, "viewers", "", "", "", { count: liveRoom - 200 }));
+runFrames(2);
+// The full scene is wiped on the way to the answer below, so the roster has to
+// be read back off disk to show it survived — that is the whole point.
+engine.destroy();
+const afterWipe = JSON.parse(store.get("test") || "{}");
+check("the saved roster survives the engine shutting down",
+  Object.keys(afterWipe).length > 0,
+  `persisted=${Object.keys(afterWipe).length}`);
+
+// A returning viewer must come back as themselves. The engine is fresh, so the
+// only way their rank can exist is by having been read from the store.
+const engine2Canvas = makeCanvas();
+const engine2 = createAstroEngine({ canvas: engine2Canvas, storageKey: "test", config: { ...cfg } });
+engine2.resize(1920, 1080);
+engine2.handle(entry(++seq, "comment", "regular", "regular", "kembali", {}));
+const returning = JSON.parse(store.get("test") || "{}");
+check("a returning viewer keeps the rank they earned",
+  typeof returning.regular?.xp === "number" && returning.regular.xp > 0,
+  `xp=${returning.regular?.xp}`);
 
 console.log("a tiny canvas does not divide by zero");
-engine.resize(40, 30);
+engine2.resize(40, 30);
 runFrames(3);
-check("survives a small canvas", canvas.width > 0 && canvas.height > 0, `w=${canvas.width} h=${canvas.height}`);
+check("survives a small canvas", engine2Canvas.width > 0 && engine2Canvas.height > 0,
+  `w=${engine2Canvas.width} h=${engine2Canvas.height}`);
 
 console.log("configure does not throw and keeps the world alive");
-engine.configure({ ...cfg, space: false, pixelSize: 3, mission: "MISI: UJIAN", censors: false });
+engine2.configure({ ...cfg, space: false, pixelSize: 3, mission: "MISI: UJIAN", censors: false });
 runFrames(3);
 check("reconfigured engine still draws", true);
 
 console.log("reset clears the roster");
-engine.reset();
+engine2.reset();
 drawCalls = 0;
 runFrames(3);
 check("empty scene still paints the backdrop", drawCalls > 300, `draws=${drawCalls}`);
 
 console.log("teardown stops the loop");
-engine.destroy();
+// engine2 is the live one here; engine was already torn down above.
+check("an interval is left running before teardown", timers.size === 1, `timers=${timers.size}`);
+engine2.destroy();
 check("no frames queued after destroy", frameHandles.size === 0, `queued=${frameHandles.size}`);
+check("the save timer is cleared too", timers.size === 0, `timers left=${timers.size}`);
 
 console.log();
 if (failures.length) {

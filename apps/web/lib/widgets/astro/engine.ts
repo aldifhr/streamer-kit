@@ -171,12 +171,24 @@ export function createAstroEngine(opts: {
   let store: Record<string, Stored> = {};
   let dirty = false;
 
-  // Live viewer count as TikTok last reported it, and the roster size it was
-  // seen at. TikTok sends no per-viewer leave event — WebcastRoomUserSeqMessage
-  // carries a count and a list of ranked contributors, not the audience — so a
-  // drop in the count is the only evidence available that people have left.
+  // Live viewer count as TikTok last reported it. TikTok sends no per-viewer
+  // leave event — WebcastRoomUserSeqMessage carries a count and a list of ranked
+  // contributors, not the audience — so a drop in the count is the only evidence
+  // available that people have left.
   let viewersNow = 0;
   let viewersBaseline = 0;
+
+  // When each saved viewer was last on screen, for pruning only. Deliberately
+  // not persisted: it describes this session's traffic, and a stale timestamp
+  // from yesterday would make "recent" mean nothing.
+  const seenAt: Record<string, number> = {};
+
+  // How much of the saved roster survives a prune. Well under the localStorage
+  // budget for a long stream, and comfortably above the roster the scene can
+  // show, so pruning only ever affects people who have been gone a long time.
+  const PRUNE_KEEP = 400;
+  const PRUNE_TOP = 120;
+  const PRUNE_RECENT = 280;
 
   try {
     store = JSON.parse(localStorage.getItem(storageKey) || "{}") || {};
@@ -185,15 +197,32 @@ export function createAstroEngine(opts: {
     // the worst case is that ranks start over.
     store = {};
   }
-  setInterval(() => {
+
+  /**
+   * Persist the roster.
+   *
+   * Pruning happens here rather than on a timer of its own so the store cannot
+   * grow between saves, and so there is exactly one place where "write" means
+   * something. `dirty` is left set when the write fails: a quota error is worth
+   * retrying after the next prune has made room, and clearing the flag would
+   * drop the change on the floor.
+   */
+  function persist() {
     if (!dirty) return;
+    prune();
     try {
       localStorage.setItem(storageKey, JSON.stringify(store));
       dirty = false;
     } catch {
       /* private mode, quota — the roster is a nicety, not a requirement */
     }
-  }, 10000);
+  }
+
+  // Held so `destroy` can stop it. A bare `setInterval` here outlived the engine
+  // and kept writing the roster to localStorage on a 10s timer, which under
+  // React's double-mount meant a destroyed engine could overwrite the store of
+  // the live one holding the same key.
+  const saveTimer: ReturnType<typeof setInterval> = setInterval(persist, 10000);
 
   /* ------------------------------------------------------------- helpers */
 
@@ -372,18 +401,23 @@ export function createAstroEngine(opts: {
    * Retire astronauts when the viewer count falls.
    *
    * The count is a number, not a list of names, so a drop can only say "somebody
-   * left", never who. Two guards keep that from eating the roster on a bad
-   * reading:
+   * left", never who. The threshold is therefore a share of the *roster*, not of
+   * the viewer count: against a 5000-viewer room a 2% drop is a hundred people,
+   * which is a quarter of a 45-person roster and would clear it in one go,
+   * while a real handful leaving would do nothing at all. Scaling by the roster
+   * makes both sides of that behave — a couple of leavers trims a couple of
+   * astronauts, and a room genuinely emptying empties the scene.
    *
-   *   - the first report only sets the baseline, because the roster is built
-   *     from joins that started arriving before the first count landed;
-   *   - a drop is ignored unless it is both a real fall and larger than the
-   *     count is noisy by. The count flickers, and a single dip during a burst
-   *     of joins is not a room emptying.
+   * Two guards remain. The first report only sets the baseline, because the
+   * roster is built from joins that started arriving before the first count
+   * landed; and a drop smaller than two is rounding, not a departure.
    *
    * Whoever goes is whoever has been quiet longest. That is a guess, but it is
    * the best one available: a viewer who has neither chatted, gifted, liked nor
    * followed in the longest is the one most likely to have closed the tab.
+   *
+   * Leaving removes someone from the scene, not from the roster of record — see
+   * `prune` for why the saved XP outlives the astronaut.
    */
   function retireForDrop() {
     if (!viewersBaseline) {
@@ -391,9 +425,8 @@ export function createAstroEngine(opts: {
       return;
     }
     const drop = viewersBaseline - viewersNow;
-    // A fall worth acting on: not rounding noise, and not a fraction of a room
-    // that is simply churning through viewers.
-    if (drop <= 0 || drop < Math.max(2, viewersBaseline * 0.02)) return;
+    const floor = Math.max(2, Math.ceil(astros.size * 0.1));
+    if (drop <= 0 || drop < floor) return;
     viewersBaseline = viewersNow;
 
     const gone = Math.min(drop, astros.size);
@@ -404,13 +437,56 @@ export function createAstroEngine(opts: {
       }
       if (!quietest) break;
       astros.delete(quietest.id);
-      delete store[quietest.id];
+      // `store` is deliberately left alone. A viewer who closes the tab and comes
+      // back is the same viewer, and resetting them is the one thing a roster
+      // should never do.
+    }
+  }
+
+  /**
+   * Keep the saved roster from growing without bound.
+   *
+   * The store now outlives the scene on purpose, so over a long stream it
+   * accumulates every viewer who has ever said anything. localStorage is capped
+   * at ~5 MB, and a write that exceeds it throws — which the save swallows, so
+   * the symptom would be a roster that silently stops persisting rather than an
+   * error. Pruning is cheaper to reason about than handling the failure.
+   *
+   * Two groups are kept: the highest XP, because those are the ranks and ranks
+   * are the point, and the most recently seen, because those are the people
+   * who might still come back. Everyone else is dropped from the store and comes
+   * back as a newcomer if they return, which is the honest outcome for a viewer
+   * who has not been seen in a long time.
+   */
+  function prune() {
+    const keys = Object.keys(store);
+    if (keys.length <= PRUNE_KEEP) return;
+
+    const kept = keys
+      .map((id) => ({ id, seen: seenAt[id] ?? 0, xp: store[id].xp ?? 0 }))
+      .sort((a, b) => b.xp - a.xp || b.seen - a.seen)
+      .slice(0, PRUNE_TOP)
+      .map((entry) => entry.id);
+
+    const recent = keys
+      .filter((id) => !kept.includes(id))
+      .map((id) => ({ id, seen: seenAt[id] ?? 0 }))
+      .sort((a, b) => b.seen - a.seen)
+      .slice(0, PRUNE_RECENT - kept.length)
+      .map((entry) => entry.id);
+
+    const survivors = new Set([...kept, ...recent]);
+    for (const id of keys) {
+      if (survivors.has(id)) continue;
+      delete store[id];
+      delete seenAt[id];
       dirty = true;
     }
   }
 
   function ensureAstro(userId: string, nick: string) {
     const id = String(userId || "anon");
+    seenAt[id] = performance.now();
     let a = astros.get(id);
     if (a) {
       if (nick) a.name = nick;
@@ -1223,16 +1299,6 @@ export function createAstroEngine(opts: {
     if (rescale && W > 0) resize(W, H);
   }
 
-  const flush = () => {
-    if (!dirty) return;
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(store));
-      dirty = false;
-    } catch {
-      /* nothing to do */
-    }
-  };
-
   return {
     handle,
     resize,
@@ -1249,12 +1315,13 @@ export function createAstroEngine(opts: {
       totalDiamonds = 0;
       partyUntil = 0;
       rocket = null;
-      flush();
+      persist();
     },
     destroy() {
       running = false;
       cancelAnimationFrame(frame);
-      flush();
+      clearInterval(saveTimer);
+      persist();
     },
   };
 }

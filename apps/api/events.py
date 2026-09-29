@@ -98,6 +98,12 @@ def _alert(e: Event) -> dict[str, Any]:
         "title": e.meta.get("title", ""),
         "text": e.value,
         "icon": e.meta.get("icon", "★"),
+        # Carried only when present, so a plain alert is unchanged on the wire
+        # and anything that checks for the field is not misled by a zero. This
+        # is the only thing that carries a donation amount, and it is what the
+        # donation jar reads — a hook that posted an amount used to have it
+        # dropped on the way out.
+        **({"amount": e.meta["amount"]} if e.meta.get("amount") is not None else {}),
     }
 
 

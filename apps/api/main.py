@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import events
+import polls
 import store
 from events import ALERT, Event
 from hub import OVERLAY, hub
@@ -183,6 +184,12 @@ class HookRequest(BaseModel):
     icon: str = "★"
     kind: str = ALERT
     amount: float | None = None
+
+
+class PollRequest(BaseModel):
+    question: str
+    options: list[str]
+    closed: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -367,6 +374,14 @@ async def webhook(overlay_id: str, req: HookRequest):
     if req.amount is not None and not value:
         value = f"{req.amount:g}"
 
+    # `amount` is forwarded, not just formatted into the text. A donation posted
+    # through this hook used to arrive as the string "50000" and nothing else,
+    # so a widget that counts money had nothing to count — the number was on the
+    # wire as a label and nowhere as a value.
+    meta: dict[str, Any] = {"title": req.title, "icon": req.icon, "count": 1}
+    if req.amount is not None:
+        meta["amount"] = req.amount
+
     await events.emit(
         overlay_id,
         Event(
@@ -374,9 +389,62 @@ async def webhook(overlay_id: str, req: HookRequest):
             user=req.user,
             user_id=req.user_id,
             value=value,
-            meta={"title": req.title, "icon": req.icon, "count": 1},
+            meta=meta,
         ),
     )
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# polls
+#
+# Reading and voting are open, like the overlay and the socket: the browser
+# source that renders the poll has no session and cannot get one. Creating and
+# closing are writes, so the guard in guard_mutations covers them without this
+# file naming a single method.
+# --------------------------------------------------------------------------
+
+
+@router.get("/api/polls/{overlay_id}")
+async def read_poll(overlay_id: str):
+    poll = polls.get_poll(overlay_id)
+    if poll is None:
+        raise HTTPException(status_code=404, detail="No poll for this overlay")
+    return poll
+
+
+@router.get("/api/polls/{overlay_id}/vote")
+async def cast_vote(overlay_id: str, choice: int = 0):
+    """A GET on purpose, so a browser source can cast one without a session.
+
+    The alternative is a POST, which the token guard would refuse, and a poll
+    nobody in the room can answer is not a poll. The trade is a vote anyone can
+    forge; see the note in polls.py.
+    """
+    # Order matters: IndexError is a subclass of LookupError, so the specific
+    # branch has to come first or a bad choice reports itself as a missing poll.
+    try:
+        return polls.vote(overlay_id, choice)
+    except PermissionError:
+        raise HTTPException(status_code=409, detail="Poll is closed")
+    except IndexError:
+        raise HTTPException(status_code=400, detail="choice is out of range")
+    except LookupError:
+        raise HTTPException(status_code=404, detail="No poll for this overlay")
+
+
+@router.post("/api/polls/{overlay_id}")
+async def put_poll(overlay_id: str, req: PollRequest):
+    try:
+        return polls.set_poll(overlay_id, req.question, req.options, req.closed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/api/polls/{overlay_id}")
+async def drop_poll(overlay_id: str):
+    if not polls.clear_poll(overlay_id):
+        raise HTTPException(status_code=404, detail="No poll for this overlay")
     return {"status": "ok"}
 
 

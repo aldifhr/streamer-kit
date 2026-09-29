@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo, type CSSProperties } from "react";
+import { use, useEffect, useMemo, type CSSProperties } from "react";
 import { globalVars, resolveSurface, styleProps } from "@/lib/css";
 import { useFeed, type Feed } from "@/lib/feed";
 import { resolve, type SceneConfig, type WidgetInstance } from "@/lib/scene";
@@ -68,20 +68,31 @@ export default function Scene({ params }: { params: Promise<{ id: string }> }) {
   const feed = useFeed(overlayId);
   const { config } = feed;
 
-  // The scene renders nothing until its config has arrived, rather than
-  // flashing a default layout that OBS would capture.
-  if (!config) return null;
+  // A blank browser source is the hardest failure to diagnose, because OBS shows
+  // nothing to look at. So a hard error renders a small notice rather than
+  // staying silent — quietly saying why beats a void.
+  useEffect(() => {
+    if (feed.error) document.title = `StreamKit — ${feed.error}`;
+  }, [feed.error]);
 
   return (
-    <div className="sk-root" style={{ padding: config.padding }}>
-      <style>{`:root{${globalVars(config.global)}}`}</style>
-      {config.customCSS ? <style dangerouslySetInnerHTML={{ __html: config.customCSS }} /> : null}
+    <div className="sk-root" style={{ padding: config?.padding ?? 12 }}>
+      <style>{config ? `:root{${globalVars(config.global)}}` : ""}</style>
+      {config?.customCSS ? <style dangerouslySetInnerHTML={{ __html: config.customCSS }} /> : null}
 
-      {config.widgets
-        .filter((w) => w.enabled)
-        .map((w) => (
-          <Widget key={w.id} widget={w} config={config} feed={feed} />
-        ))}
+      {/* The scene renders nothing until its config has arrived, rather than
+          flashing a default layout that OBS would capture. */}
+      {config
+        ? config.widgets
+            .filter((w) => w.enabled)
+            .map((w) => <Widget key={w.id} widget={w} config={config} feed={feed} />)
+        : null}
+
+      {feed.error ? (
+        <div className="sk-notice" role="status">
+          {feed.error}
+        </div>
+      ) : null}
     </div>
   );
 }

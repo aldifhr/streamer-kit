@@ -300,6 +300,13 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), overlay_id: overlayId }),
       });
+      // Named explicitly, because the generic message for a 401 is "connect
+      // failed" and the actual cause is a build-time env mismatch that no
+      // amount of retrying will fix.
+      if (res.status === 401) {
+        setError("API token rejected — check STREAMKIT_TOKEN and NEXT_PUBLIC_API_TOKEN match, then rebuild the frontend");
+        return;
+      }
       if (!res.ok) throw new Error(`connect failed (${res.status})`);
     } catch (e) {
       setStatus("error");

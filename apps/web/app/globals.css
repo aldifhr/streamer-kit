@@ -308,6 +308,25 @@ body {
 .sk-event[data-kind="follow"] { display: var(--w-show-follow, flex); }
 .sk-event[data-kind="share"] { display: var(--w-show-share, flex); }
 
+/* A hard failure, stated rather than hidden. A blank browser source gives the
+   streamer nothing to look at, and the usual cause — the API expects a token
+   this bundle was not built with — is invisible without it. Deliberately small
+   and out of the way: it is a diagnostic, not part of the design. */
+.sk-notice {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  max-width: 60ch;
+  padding: 8px 12px;
+  border: 1px solid #7f1d1d;
+  border-radius: 6px;
+  background: rgba(30, 6, 6, 0.88);
+  color: #fca5a5;
+  font: 500 14px/1.4 system-ui, sans-serif;
+  text-shadow: none;
+  z-index: 10;
+}
+
 @keyframes sk-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }

@@ -1,0 +1,107 @@
+"""Contract test for the split API.
+
+Exercises the routes end to end through TestClient, including a live WebSocket
+attach, against a throwaway store file so it never touches a real overlays.json.
+
+Run: python apps/api/test_api.py
+"""
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+# Point the store at a scratch file before main imports it.
+_tmp = Path(tempfile.mkdtemp())
+os.environ["STREAMKIT_CONFIG_DIR"] = str(_tmp)
+
+import store  # noqa: E402
+
+store.CONFIG_DIR = _tmp
+store.OVERLAYS_FILE = _tmp / "overlays.json"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import main  # noqa: E402
+from events import ALERT, Event, to_wire  # noqa: E402
+
+failures: list[str] = []
+
+
+def check(label: str, cond: bool, detail: str = "") -> None:
+    if cond:
+        print(f"  ok   {label}")
+    else:
+        print(f"  FAIL {label} {detail}")
+        failures.append(label)
+
+
+with TestClient(main.app) as client:
+    print("crud")
+    created = client.post("/api/overlays", json={"name": "Test scene"}).json()["overlay"]
+    oid = created["id"]
+    check("create returns id+name", bool(oid) and created["name"] == "Test scene")
+    check("create defaults theme", created["theme"] == "streamline", created["theme"])
+
+    check("get by id", client.get(f"/api/overlays/{oid}").json()["name"] == "Test scene")
+    check("list contains it", oid in [o["id"] for o in client.get("/api/overlays").json()["overlays"]])
+
+    check("missing overlay is 404", client.get("/api/overlays/nope").status_code == 404)
+
+    print("username")
+    patched = client.patch(f"/api/overlays/{oid}", json={"username": "@someone"}).json()["overlay"]
+    check("username strips @", patched["username"] == "someone", patched["username"])
+    check("patch keeps config", client.get(f"/api/overlays/{oid}").json()["config"]["theme"] == "streamline")
+
+    print("config")
+    cfg = {"theme": "quiet", "widgets": [{"id": "a", "type": "chat"}]}
+    check("config save", client.post(f"/api/overlays/{oid}/config", json={"config": cfg}).status_code == 200)
+    check("config persisted", client.get(f"/api/overlays/{oid}").json()["config"] == cfg)
+    check("config on missing is 404", client.post("/api/overlays/nope/config", json={"config": cfg}).status_code == 404)
+
+    print("websocket attach")
+    with client.websocket_connect(f"/ws/overlay/{oid}") as ws:
+        first = ws.receive_json()
+        check("first frame is config", first["type"] == "config" and first["config"] == cfg, str(first))
+        second = ws.receive_json()
+        check("status snapshot on attach", second["type"] == "status" and second["connected"] is False, str(second))
+
+        print("trigger -> pushed to the socket")
+        client.post(f"/api/overlays/{oid}/trigger", json={"kind": ALERT, "title": "Hi", "text": "there"})
+        pushed = ws.receive_json()
+        check("alert reached socket", pushed["type"] == ALERT and pushed["title"] == "Hi", str(pushed))
+
+        print("customizer clients also see config updates")
+        client.post(f"/api/overlays/{oid}/config", json={"config": {"theme": "rail"}})
+        pushed_cfg = ws.receive_json()
+        check("config broadcast", pushed_cfg["type"] == "config" and pushed_cfg["config"]["theme"] == "rail", str(pushed_cfg))
+
+    print("triggers")
+    check("trigger on missing is 404", client.post("/api/overlays/nope/trigger", json={}).status_code == 404)
+    r = client.post(f"/api/hooks/{oid}", json={"user": "donor", "text": "Rp50k", "amount": 50000})
+    check("webhook accepted", r.status_code == 200, r.text)
+
+    print("connect validation")
+    check("blank username is 400", client.post("/api/connect", json={"username": "  "}).status_code == 400)
+    check("disconnect is idempotent", client.post("/api/disconnect", json={"overlay_id": oid}).status_code == 200)
+
+    print("delete")
+    check("delete ok", client.delete(f"/api/overlays/{oid}").json()["status"] == "ok")
+    check("delete twice is 404", client.delete(f"/api/overlays/{oid}").status_code == 404)
+
+print("wire format")
+check("comment wire unchanged", to_wire(Event(kind="comment", user="a", value="hi")) == {"type": "comment", "user": "a", "text": "hi"})
+check("like wire unchanged", to_wire(Event(kind="like", user="a", meta={"count": 2, "totalLikes": 9})) == {"type": "like", "user": "a", "count": 2, "totalLikes": 9})
+check("gift wire unchanged", to_wire(Event(kind="gift", user="a", meta={"giftName": "Rose", "count": 1, "value": 5})) == {"type": "gift", "user": "a", "giftName": "Rose", "count": 1, "value": 5})
+check("join wire unchanged", to_wire(Event(kind="join", user="a", meta={"viewers": 3})) == {"type": "join", "user": "a", "viewers": 3})
+check("viewers wire unchanged", to_wire(Event(kind="viewers", meta={"count": 12})) == {"type": "viewers", "count": 12})
+check("unknown kind surfaces as alert", to_wire(Event(kind="bogus"))["type"] == ALERT)
+
+print()
+if failures:
+    print(f"{len(failures)} FAILED: {failures}")
+    sys.exit(1)
+print("all passed")

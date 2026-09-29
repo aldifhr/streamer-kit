@@ -1,272 +1,72 @@
+"""StreamKit API — routes only.
+
+Persistence lives in `store`, WebSocket bookkeeping in `hub`, and the shape of
+everything that reaches a browser in `events`. This module is the HTTP surface
+and nothing else; the split exists so that adding a widget or an event source
+does not mean editing the file that owns routing.
+"""
+
 import asyncio
 import json
-import os
-import time
-import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-BASE_DIR = Path(__file__).parent
-CONFIG_DIR = BASE_DIR / "config"
-OVERLAYS_FILE = CONFIG_DIR / "overlays.json"
-DEFAULT_CONFIG_FILE = CONFIG_DIR / "default_config.json"
+import events
+import store
+from events import ALERT, Event
+from hub import OVERLAY, hub
+from sources import TikTokSource
 
 # Only the theme id lives here. Every other style default is owned by the
-# frontend (apps/web/lib/config.ts) so the two can't drift apart — an earlier
+# frontend (apps/web/lib/widgets) so the two can't drift apart — an earlier
 # version mirrored the full schema here and silently overrode the frontend
 # defaults with stale values.
-DEFAULT_OVERLAY_CONFIG: dict[str, Any] = {
-    "theme": "streamline",
-}
+DEFAULT_OVERLAY_CONFIG: dict[str, Any] = {"theme": "streamline"}
 
 
-def load_overlays() -> dict[str, Any]:
-    if OVERLAYS_FILE.exists():
-        return json.loads(OVERLAYS_FILE.read_text(encoding="utf-8"))
-    return {}
+# --------------------------------------------------------------------------
+# live connections
+# --------------------------------------------------------------------------
+
+#: overlay_id -> source. One live room per overlay, whatever asked for it.
+sources: dict[str, TikTokSource] = {}
 
 
-def save_overlays(overlays: dict[str, Any]) -> None:
-    CONFIG_DIR.mkdir(exist_ok=True)
-    OVERLAYS_FILE.write_text(json.dumps(overlays, indent=2, ensure_ascii=False), encoding="utf-8")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    for source in list(sources.values()):
+        await source.stop()
+    sources.clear()
 
 
-class ConnectionManager:
-    def __init__(self) -> None:
-        self.active: dict[str, WebSocket] = {}
-        self.overlay_clients: dict[str, str] = {}
-        self.customizer_clients: set[str] = set()
+app = FastAPI(title="StreamKit", lifespan=lifespan)
 
-    async def connect(self, websocket: WebSocket, client_type: str, overlay_id: str | None = None) -> str:
-        await websocket.accept()
-        client_id = str(uuid.uuid4())
-        self.active[client_id] = websocket
-        if client_type == "overlay" and overlay_id:
-            self.overlay_clients[client_id] = overlay_id
-        elif client_type == "customizer":
-            self.customizer_clients.add(client_id)
-        return client_id
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    def disconnect(self, client_id: str) -> None:
-        self.active.pop(client_id, None)
-        self.overlay_clients.pop(client_id, None)
-        self.customizer_clients.discard(client_id)
-
-    async def broadcast(self, message: dict[str, Any], client_type: str | None = None, overlay_id: str | None = None) -> None:
-        targets: set[str] = set()
-        if client_type == "overlay" and overlay_id:
-            targets = {cid for cid, oid in self.overlay_clients.items() if oid == overlay_id}
-        elif client_type == "customizer":
-            targets = self.customizer_clients.copy()
-        else:
-            targets = set(self.active.keys())
-
-        data = json.dumps(message, ensure_ascii=False)
-        disconnected: list[str] = []
-        for cid in targets:
-            ws = self.active.get(cid)
-            if ws is None:
-                continue
-            try:
-                await ws.send_text(data)
-            except Exception:
-                disconnected.append(cid)
-        for cid in disconnected:
-            self.disconnect(cid)
+router = APIRouter()
 
 
-manager = ConnectionManager()
-
-# TikTok substitutes these when a viewer's profile is unavailable or deleted.
-# Broadcasting them puts literal "Not found" / "?" on the overlay, so they are
-# dropped rather than shown as if they were usernames.
-PLACEHOLDER_NICKNAMES = {"", "?", "not found", "unknown", "-", "null", "none"}
-
-
-def display_name(user: Any) -> str | None:
-    """Return a nickname worth showing, or None if it is missing/placeholder."""
-
-    if user is None:
-        return None
-    nickname = (getattr(user, "nickname", "") or "").strip()
-    if nickname.lower() in PLACEHOLDER_NICKNAMES:
-        return None
-    return nickname
-
-
-class TikTokLiveClient:
-    def __init__(self, username: str, overlay_id: str) -> None:
-        self.username = username
-        self.overlay_id = overlay_id
-        self._client = None
-        # _running means "a connection was attempted"; _connected means the
-        # WebSocket handshake with TikTok actually completed. Reporting the
-        # latter is what makes a newly-attached client's status honest.
-        self._running = False
-        self._connected = False
-        self._task: asyncio.Task | None = None
-
-    def status_payload(self) -> dict[str, Any]:
-        if self._connected:
-            return {
-                "type": "status",
-                "connected": True,
-                "message": f"Connected to @{self.username}",
-            }
-        if self._running:
-            return {
-                "type": "status",
-                "connected": False,
-                "connecting": True,
-                "message": f"Connecting to @{self.username}",
-            }
-        return {"type": "status", "connected": False, "message": "Offline"}
-
-    async def start(self) -> None:
-        try:
-            from TikTokLive import TikTokLiveClient as Client
-            from TikTokLive.events import (
-                ConnectEvent, DisconnectEvent, CommentEvent, LikeEvent,
-                GiftEvent, RoomUserSeqEvent, JoinEvent
-            )
-        except ImportError:
-            await manager.broadcast({
-                "type": "error",
-                "message": "TikTokLive library not installed. Run: pip install TikTokLive"
-            }, overlay_id=self.overlay_id)
-            return
-
-        self._client = Client(unique_id=self.username)
-        self._running = True
-
-        @self._client.on(ConnectEvent)
-        async def on_connect(_):
-            self._connected = True
-            await manager.broadcast({
-                "type": "status",
-                "connected": True,
-                "message": f"Connected to @{self.username}"
-            }, overlay_id=self.overlay_id)
-
-        @self._client.on(DisconnectEvent)
-        async def on_disconnect(_):
-            self._running = False
-            self._connected = False
-            await manager.broadcast({
-                "type": "status",
-                "connected": False,
-                "message": "Disconnected"
-            }, overlay_id=self.overlay_id)
-
-        @self._client.on(CommentEvent)
-        async def on_comment(event):
-            name = display_name(event.user)
-            if not name:
-                return
-            await manager.broadcast({
-                "type": "comment",
-                "user": name,
-                "text": event.comment
-            }, overlay_id=self.overlay_id)
-
-        @self._client.on(LikeEvent)
-        async def on_like(event):
-            name = display_name(event.user)
-            if not name:
-                return
-            await manager.broadcast({
-                "type": "like",
-                "user": name,
-                "count": event.count,
-                "totalLikes": event.total
-            }, overlay_id=self.overlay_id)
-
-        @self._client.on(GiftEvent)
-        async def on_gift(event):
-            if event.gift is None:
-                return
-            name = display_name(event.user)
-            if not name:
-                return
-            await manager.broadcast({
-                "type": "gift",
-                "user": name,
-                "giftName": event.gift.name or "Gift",
-                "count": event.repeat_count,
-                "value": event.gift.diamond_count * event.repeat_count
-            }, overlay_id=self.overlay_id)
-
-        # JoinEvent is sparse — TikTok batches member messages rather than
-        # sending one per viewer — so treat it as a bonus, not a source of
-        # truth for who is in the room.
-        @self._client.on(JoinEvent)
-        async def on_join(event):
-            name = display_name(event.user)
-            if not name:
-                return
-            await manager.broadcast({
-                "type": "join",
-                "user": name,
-                "viewers": event.member_count
-            }, overlay_id=self.overlay_id)
-
-        @self._client.on(RoomUserSeqEvent)
-        async def on_viewer(event):
-            await manager.broadcast({
-                "type": "viewers",
-                "count": event.total_user
-            }, overlay_id=self.overlay_id)
-
-        try:
-            await self._client.start()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self._running = False
-            self._connected = False
-            await manager.broadcast({
-                "type": "error",
-                "message": f"Connection failed: {e}"
-            }, overlay_id=self.overlay_id)
-        finally:
-            self._connected = False
-            await manager.broadcast({
-                "type": "status",
-                "connected": False,
-                "message": "Disconnected"
-            }, overlay_id=self.overlay_id)
-
-    async def stop(self) -> None:
-        self._running = False
-        self._connected = False
-        if self._client is not None:
-            try:
-                await asyncio.wait_for(self._client.disconnect(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
-            except Exception:
-                pass
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-        self._client = None
-        self._task = None
-
-
-live_clients: dict[str, TikTokLiveClient] = {}
+# --------------------------------------------------------------------------
+# request bodies
+# --------------------------------------------------------------------------
 
 
 class ConnectRequest(BaseModel):
-    username: str
+    # Optional because /api/disconnect is posted with only an overlay id, and
+    # this used to be required — which made disconnect answer 422 and left the
+    # editor's Stop button silently doing nothing. /api/connect validates it.
+    username: str = ""
     overlay_id: str | None = None
 
 
@@ -284,130 +84,131 @@ class ConfigUpdateRequest(BaseModel):
     overlay_id: str | None = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    for client in live_clients.values():
-        await client.stop()
+class TriggerRequest(BaseModel):
+    """Fire an event by hand — the "alert now" path with no live room involved.
+
+    Deliberately permissive on `kind`: the set of things a streamer can trigger
+    should grow without a backend release, and an unrecognised kind is surfaced
+    as an alert by `events.to_wire` rather than rejected.
+    """
+
+    kind: str = ALERT
+    user: str = ""
+    text: str = ""
+    title: str = ""
+    icon: str = "★"
 
 
-app = FastAPI(title="Stream-Kit", lifespan=lifespan)
+class HookRequest(BaseModel):
+    """External webhook body. Field names are matched case-insensitively."""
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/api/overlays")
-async def list_overlays():
-    overlays = load_overlays()
-    result = []
-    for oid, data in overlays.items():
-        result.append({
-            "id": oid,
-            "name": data.get("name", "Untitled"),
-            "username": data.get("username", ""),
-            "theme": data.get("config", {}).get("theme", DEFAULT_OVERLAY_CONFIG["theme"]),
-            "config": data.get("config", {}),
-            "createdAt": data.get("createdAt", 0),
-        })
-    return {"overlays": result}
+    user: str = ""
+    text: str = ""
+    title: str = ""
+    icon: str = "★"
+    kind: str = ALERT
+    amount: float | None = None
 
 
-@app.post("/api/overlays")
-async def create_overlay(req: CreateOverlayRequest):
-    overlays = load_overlays()
-    overlay_id = str(uuid.uuid4())
-    overlays[overlay_id] = {
-        "name": req.name.strip(),
-        "username": "",
-        "config": DEFAULT_OVERLAY_CONFIG.copy(),
-        "createdAt": time.time(),
-    }
-    save_overlays(overlays)
+# --------------------------------------------------------------------------
+# overlays
+# --------------------------------------------------------------------------
+
+
+def _summary(overlay_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    config = record.get("config", {})
     return {
-        "overlay": {
-            "id": overlay_id,
-            "name": req.name.strip(),
-            "username": "",
-            "theme": DEFAULT_OVERLAY_CONFIG["theme"],
-            "createdAt": overlays[overlay_id]["createdAt"],
-        }
+        "id": overlay_id,
+        "name": record.get("name", "Untitled"),
+        "username": record.get("username", ""),
+        "theme": config.get("theme", DEFAULT_OVERLAY_CONFIG["theme"]),
+        "config": config,
+        "createdAt": record.get("createdAt", 0),
     }
 
 
-@app.patch("/api/overlays/{overlay_id}")
+@router.get("/api/overlays")
+async def list_overlays():
+    return {"overlays": [_summary(oid, rec) for oid, rec in store.all_overlays().items()]}
+
+
+@router.post("/api/overlays")
+async def create_overlay(req: CreateOverlayRequest):
+    name = req.name.strip() or "Untitled"
+    record = store.create_overlay(name, dict(DEFAULT_OVERLAY_CONFIG))
+    return {"overlay": _summary(record["id"], record)}
+
+
+@router.patch("/api/overlays/{overlay_id}")
 async def update_overlay(overlay_id: str, req: UpdateOverlayRequest):
-    overlays = load_overlays()
-    if overlay_id not in overlays:
-        raise HTTPException(status_code=404, detail="Overlay not found")
-
-    record = overlays[overlay_id]
     username_changed = False
-
-    if req.name is not None:
-        record["name"] = req.name.strip()
     if req.username is not None:
-        new_username = req.username.strip().lstrip("@")
-        username_changed = new_username != record.get("username", "")
-        record["username"] = new_username
+        current = store.username_of(overlay_id)
+        incoming = req.username.strip().lstrip("@")
+        username_changed = incoming != current
 
-    save_overlays(overlays)
-
-    # A different username means the running client is pointed at the wrong
-    # room, so drop it; the overlay page re-requests the connection on reload.
-    if username_changed and live_clients.get(overlay_id) and live_clients[overlay_id]._running:
-        await live_clients[overlay_id].stop()
-
-    return {"overlay": record}
-
-
-@app.get("/api/overlays/{overlay_id}")
-async def get_overlay(overlay_id: str):
-    overlays = load_overlays()
-    if overlay_id not in overlays:
-        raise HTTPException(status_code=404, detail="Overlay not found")
-    return overlays[overlay_id]
-
-
-@app.delete("/api/overlays/{overlay_id}")
-async def delete_overlay(overlay_id: str):
-    overlays = load_overlays()
-    if overlay_id not in overlays:
-        raise HTTPException(status_code=404, detail="Overlay not found")
-    del overlays[overlay_id]
-    save_overlays(overlays)
-    return {"status": "ok"}
-
-
-@app.post("/api/overlays/{overlay_id}/config")
-async def update_overlay_config(overlay_id: str, req: ConfigUpdateRequest):
-    overlays = load_overlays()
-    if overlay_id not in overlays:
-        raise HTTPException(status_code=404, detail="Overlay not found")
-    overlays[overlay_id]["config"] = req.config
-    save_overlays(overlays)
-    await manager.broadcast(
-        {"type": "config", "config": req.config},
-        client_type="overlay",
-        overlay_id=overlay_id,
+    record = store.update_overlay(
+        overlay_id,
+        name=req.name.strip() if req.name is not None else None,
+        username=req.username.strip().lstrip("@") if req.username is not None else None,
     )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Overlay not found")
+
+    # A different username means the running source is pointed at the wrong
+    # room, so drop it; the overlay page re-requests the connection on reload.
+    if username_changed:
+        source = sources.get(overlay_id)
+        if source is not None and source._running:
+            await source.stop()
+
+    return {"overlay": _summary(overlay_id, record)}
+
+
+@router.get("/api/overlays/{overlay_id}")
+async def get_overlay(overlay_id: str):
+    record = store.get_overlay(overlay_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Overlay not found")
+    return record
+
+
+@router.delete("/api/overlays/{overlay_id}")
+async def delete_overlay(overlay_id: str):
+    if not store.delete_overlay(overlay_id):
+        raise HTTPException(status_code=404, detail="Overlay not found")
+    source = sources.pop(overlay_id, None)
+    if source is not None:
+        await source.stop()
     return {"status": "ok"}
 
 
-@app.post("/api/connect")
+@router.post("/api/overlays/{overlay_id}/config")
+async def update_overlay_config(overlay_id: str, req: ConfigUpdateRequest):
+    if not store.set_config(overlay_id, req.config):
+        raise HTTPException(status_code=404, detail="Overlay not found")
+    await events.emit_config(overlay_id, req.config)
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# live connection
+# --------------------------------------------------------------------------
+
+
+@router.post("/api/connect")
 async def connect(req: ConnectRequest):
     overlay_id = req.overlay_id or "default"
+    username = req.username.strip().lstrip("@")
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
 
-    existing = live_clients.get(overlay_id)
-    if existing and existing._running and existing.username == req.username:
-        # Idempotent path. The ConnectEvent for this client already fired
+    existing = sources.get(overlay_id)
+    if existing and existing._running and existing.username == username:
+        # Idempotent path. The ConnectEvent for this source already fired
         # earlier, so anyone attaching now would otherwise never learn the
         # current state — push it explicitly.
-        await manager.broadcast(existing.status_payload(), overlay_id=overlay_id)
+        await hub.broadcast(existing.status_payload(), overlay_id=overlay_id)
         return {
             "status": "already-connected",
             "username": existing.username,
@@ -418,40 +219,102 @@ async def connect(req: ConnectRequest):
     if existing:
         await existing.stop()
 
-    client = TikTokLiveClient(req.username, overlay_id)
-    live_clients[overlay_id] = client
-    client._task = asyncio.create_task(client.start())
-    return {"status": "connecting", "username": req.username, "overlay_id": overlay_id}
+    source = TikTokSource(username, overlay_id)
+    sources[overlay_id] = source
+    source._task = asyncio.create_task(source.start())
+    return {"status": "connecting", "username": username, "overlay_id": overlay_id}
 
 
-@app.post("/api/disconnect")
+@router.post("/api/disconnect")
 async def disconnect(req: ConnectRequest):
     overlay_id = req.overlay_id or "default"
-    if overlay_id in live_clients:
-        await live_clients[overlay_id].stop()
-        del live_clients[overlay_id]
+    source = sources.pop(overlay_id, None)
+    if source is not None:
+        await source.stop()
     return {"status": "disconnected"}
+
+
+@router.get("/api/overlays/{overlay_id}/status")
+async def connection_status(overlay_id: str):
+    source = sources.get(overlay_id)
+    return source.status_payload() if source else {"type": "status", "connected": False, "message": "Offline"}
+
+
+# --------------------------------------------------------------------------
+# manual triggers and webhooks
+# --------------------------------------------------------------------------
+
+
+@router.post("/api/overlays/{overlay_id}/trigger")
+async def trigger(overlay_id: str, req: TriggerRequest):
+    """Emit an event into an overlay by hand.
+
+    This is the seam that makes the overlay more than a chat mirror: anything
+    that can POST here — a Stream Deck, a Discord bot, a cron job — appears on
+    the stream without touching the backend.
+    """
+    if store.get_overlay(overlay_id) is None:
+        raise HTTPException(status_code=404, detail="Overlay not found")
+
+    await events.emit(
+        overlay_id,
+        Event(
+            kind=req.kind,
+            user=req.user,
+            value=req.text,
+            meta={"title": req.title, "icon": req.icon, "count": 1},
+        ),
+    )
+    return {"status": "ok", "kind": req.kind}
+
+
+@router.post("/api/hooks/{overlay_id}")
+async def webhook(overlay_id: str, req: HookRequest):
+    """Alias for `trigger` with a flatter body, for external integrations.
+
+    Kept separate rather than merged so the intent at the call site is
+    readable, and so this path can grow its own auth later without changing
+    what the dashboard's own button posts.
+    """
+    if store.get_overlay(overlay_id) is None:
+        raise HTTPException(status_code=404, detail="Overlay not found")
+
+    value = req.text
+    if req.amount is not None and not value:
+        value = f"{req.amount:g}"
+
+    await events.emit(
+        overlay_id,
+        Event(
+            kind=req.kind,
+            user=req.user,
+            value=value,
+            meta={"title": req.title, "icon": req.icon, "count": 1},
+        ),
+    )
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# websocket
+# --------------------------------------------------------------------------
 
 
 @app.websocket("/ws/{client_type}/{overlay_id}")
 async def websocket_endpoint(websocket: WebSocket, client_type: str, overlay_id: str):
-    client_id = await manager.connect(websocket, client_type, overlay_id)
+    client_id = await hub.connect(websocket, client_type, overlay_id)
     try:
-        overlays = load_overlays()
-        config = overlays.get(overlay_id, {}).get("config", DEFAULT_OVERLAY_CONFIG)
-        await websocket.send_text(json.dumps({"type": "config", "config": config}))
+        record = store.get_overlay(overlay_id)
+        config = record.get("config", DEFAULT_OVERLAY_CONFIG) if record else DEFAULT_OVERLAY_CONFIG
+        await websocket.send_text(json.dumps({"type": "config", "config": config}, ensure_ascii=False))
 
         # Send a status snapshot on attach. Connection-state events are edge
         # triggered, so a client opening the socket after the handshake
         # finished would otherwise sit on "connecting" forever.
-        existing = live_clients.get(overlay_id)
-        await websocket.send_text(
-            json.dumps(
-                existing.status_payload()
-                if existing
-                else {"type": "status", "connected": False, "message": "Offline"}
-            )
-        )
+        source = sources.get(overlay_id)
+        payload = source.status_payload() if source else {"type": "status", "connected": False, "message": "Offline"}
+        await websocket.send_text(json.dumps(payload, ensure_ascii=False))
+
         while True:
             data = await websocket.receive_text()
             try:
@@ -463,7 +326,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, overlay_id:
     except WebSocketDisconnect:
         pass
     finally:
-        manager.disconnect(client_id)
+        hub.disconnect(client_id)
+
+
+app.include_router(router)
 
 
 if __name__ == "__main__":

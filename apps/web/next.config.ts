@@ -1,35 +1,22 @@
 import type { NextConfig } from "next";
 
 /**
- * Where the API lives.
+ * No rewrites here on purpose.
  *
- * One source of truth, because the frontend reaches the backend two different
- * ways and they have to agree: relative `/api/*` calls are proxied by the
- * rewrite below, while the WebSocket and the connect calls bypass it entirely
- * (Next does not proxy WS upgrades). Pointing the rewrite at a hardcoded
- * localhost while the socket goes to a deployed host is how you end up with a
- * dashboard that lists nothing and an overlay that still works.
+ * `/api/*` is served by the route handler in `app/api/[...path]/route.ts`,
+ * which exists because the API's write token has to be attached to the outgoing
+ * request server-side. A rewrite cannot do that: Next only allows `source`,
+ * `destination`, `has`, `missing`, `locale` and `basePath` on a rewrite, and a
+ * config carrying a `headers` property fails the build outright.
  *
- * Read at build time. NEXT_PUBLIC_* values are inlined into the client bundle,
- * so changing this requires a rebuild, not just a restart.
+ * The WebSocket is also not proxied, and never was — Next does not proxy WS
+ * upgrades, so a socket sent to the FE host would hang. The overlay builds its
+ * socket URL against `NEXT_PUBLIC_API_URL` directly; see `lib/api.ts`.
+ *
+ * That value stays a NEXT_PUBLIC_ one on purpose: the browser needs the origin
+ * to open the socket, and a hostname is not a credential. The token does not
+ * come this way — see STREAMKIT_API_TOKEN in `.env.example`.
  */
-const backend = (
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ?? "http://localhost:8000"
-).replace(/\/+$/, "");
-
-const nextConfig: NextConfig = {
-  async rewrites() {
-    // NOTE: `/ws/*` is intentionally NOT proxied here. Next.js rewrites only
-    // apply to plain HTTP requests, never to a WebSocket upgrade, so the socket
-    // would hang on the FE host and never reach the API. The overlay builds its
-    // socket URL against the API origin directly — see `lib/api.ts`.
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backend}/api/:path*`,
-      },
-    ];
-  },
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

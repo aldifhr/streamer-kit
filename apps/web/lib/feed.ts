@@ -110,9 +110,9 @@ export function useFeed(overlayId: string): Feed {
         //
         // A rejected connect used to be swallowed, which produced a permanently
         // blank browser source with nothing in the console: the most common
-        // cause is the API having STREAMKIT_TOKEN set while this bundle was
-        // built without NEXT_PUBLIC_API_TOKEN, and that is worth saying out
-        // loud rather than failing quietly on stream.
+        // cause is the API having STREAMKIT_TOKEN set while this build has no
+        // matching STREAMKIT_API_TOKEN to attach at the proxy. That is worth
+        // saying out loud rather than failing quietly on stream.
         apiFetch("/api/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

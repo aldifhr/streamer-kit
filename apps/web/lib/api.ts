@@ -21,11 +21,6 @@ const configured = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "");
 export const API_ORIGIN =
   configured ?? (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
 
-/** An absolute API URL. Use for calls made outside the Next origin's scope. */
-export function apiUrl(path: string): string {
-  return `${API_ORIGIN}${path}`;
-}
-
 function toWebSocketOrigin(origin: string): string {
   if (!origin) {
     return "";
@@ -40,22 +35,16 @@ export function wsUrl(path: string): string {
 }
 
 /**
- * Shown to the browser, so it is not a secret — anything in the bundle can be
- * read. It stops drive-by deletions and casual scripted abuse, which is what a
- * publicly reachable API actually gets. Hard protection belongs at the reverse
- * proxy in front of it: basic auth, an IP allowlist, or a Cloudflare Access
- * policy.
- */
-const TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
-
-/**
- * fetch against the API, with the token attached.
+ * fetch against the API.
  *
- * Use this for anything that writes. Reads can use a plain relative fetch, which
- * goes through the rewrite.
+ * Deliberately plain: the write token is attached by the rewrite in
+ * next.config.ts, on the proxy hop, so it never reaches the browser. This
+ * function used to read a NEXT_PUBLIC_API_TOKEN and set the header by hand,
+ * which put the token in the client bundle where anyone could read it.
+ *
+ * Reads can use a bare relative fetch; this exists so every write goes through
+ * one path and cannot forget to.
  */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  if (TOKEN) headers.set("x-streamkit-token", TOKEN);
-  return fetch(`${API_ORIGIN}${path}`, { ...init, headers });
+  return fetch(path, init);
 }

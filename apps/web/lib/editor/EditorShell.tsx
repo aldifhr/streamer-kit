@@ -304,7 +304,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       // failed" and the actual cause is a build-time env mismatch that no
       // amount of retrying will fix.
       if (res.status === 401) {
-        setError("API token rejected — check STREAMKIT_TOKEN and NEXT_PUBLIC_API_TOKEN match, then rebuild the frontend");
+        setError("API rejected the write — check the API's STREAMKIT_TOKEN matches this build's STREAMKIT_API_TOKEN, then rebuild the frontend");
         return;
       }
       if (!res.ok) throw new Error(`connect failed (${res.status})`);

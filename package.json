@@ -11,6 +11,7 @@
     "start": "npm run start --workspace=apps/web",
     "test:api": "cd apps/api && python test_api.py",
     "test:astro": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-engine.cjs",
+    "test:registry": "tsc -p apps/web/tests/tsconfig.registry.json && node apps/web/tests/widget-registry.cjs",
     "typecheck": "tsc --noEmit -p apps/web/tsconfig.json"
   },
   "devDependencies": {

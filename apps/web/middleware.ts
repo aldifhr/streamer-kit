@@ -17,7 +17,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, isValidSession } from "@/lib/session";
 
-/** Prefixes an operator must be able to reach without a session. */
+/**
+ * Prefixes an operator must be able to reach without a session.
+ *
+ * `/api/session` is here for clarity even though the matcher below already
+ * excludes everything under `/api`: the login POST has to reach its own route
+ * handler, and this is the list that says so.
+ */
 const PUBLIC = ["/login", "/api/session", "/overlay", "/_next", "/favicon"];
 
 // Async: the HMAC is WebCrypto, because the Edge runtime this file runs on has
@@ -43,8 +49,14 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next's own assets and the public routes above, which are
-  // excluded here so a signed-out visitor never pays for a middleware hop on
-  // a page that does not need the check.
-  matcher: ["/((?!api/session|_next/static|_next/image|favicon.ico).*)"],
+  // Pages only. `/api/*` is deliberately absent so the proxy route is the one
+  // that answers, with a 401 and a JSON body: a fetch from the editor can act on
+  // that, whereas a redirect hands it an HTML login page it cannot use. The
+  // middleware would still be a redirect if it saw these — a browser following
+  // a 307 to `/login` renders fine, an XHR does not. It is a convenience here,
+  // never the lock; the proxy holds that, and it holds it for direct callers
+  // that never pass through this file.
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+  ],
 };

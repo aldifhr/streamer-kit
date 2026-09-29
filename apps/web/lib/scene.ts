@@ -14,21 +14,14 @@
 import { DEFAULT_GLOBAL, type GlobalStyle, type StyleMap } from "@/lib/css";
 import { num } from "@/lib/widgets/style";
 import { WIDGET_TYPES, widgetType } from "@/lib/widgets/registry";
-import { newWidgetId } from "@/lib/widgets/types";
+import { newWidgetId, type WidgetInstance } from "@/lib/widgets/types";
 
 export const SCENE_VERSION = 2;
 
-export interface WidgetInstance {
-  id: string;
-  type: string;
-  enabled: boolean;
-  /** Top-left of the widget as a fraction of the scene, 0..1. */
-  x: number;
-  y: number;
-  scale: number;
-  /** Only the keys the user has actually changed, over the widget's defaults. */
-  style: StyleMap;
-}
+// The shape lives in the widget contract so customiser props can name it
+// without importing this module. Re-exported here because the scene is what
+// callers think in terms of.
+export type { WidgetInstance };
 
 export interface SceneConfig {
   version: number;

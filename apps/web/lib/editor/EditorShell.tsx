@@ -17,6 +17,7 @@ import {
 import { WIDGET_LIST, widgetType } from "@/lib/widgets/registry";
 import type { ConnectionStatus } from "@/lib/feed";
 import { WidgetForm } from "./ControlForm";
+import { customiserFor } from "./customisers/registry";
 import { ThemeSwatch } from "./ThemeSwatch";
 import { TriggerPanel } from "./TriggerPanel";
 import { Field, Range, Segmented, Toggle, inputCls } from "./controls";
@@ -398,6 +399,9 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
 
   const activeWidget = config.widgets.find((w2) => w2.id === selected) ?? null;
   const activeType = activeWidget ? widgetType(activeWidget.type) : null;
+  // Null when this widget has no bespoke customiser, which is the signal to
+  // fall back to the generated form.
+  const Customiser = activeWidget ? customiserFor(activeWidget.type) : undefined;
 
   if (loading) {
     return (
@@ -708,11 +712,26 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                           </div>
                         )}
 
-                        <WidgetForm
-                          groups={activeType.groups}
-                          style={resolve(activeWidget)}
-                          onChange={(key, value) => patchStyle(activeWidget.id, key, value)}
-                        />
+                        {/* A widget either brings its own customiser or is given
+                            the form generated from its control descriptors. Both
+                            read the same resolved style, so a bespoke customiser
+                            can never drift from the defaults. */}
+                        {Customiser ? (
+                          <Customiser
+                            widget={activeWidget}
+                            style={resolve(activeWidget)}
+                            global={config.global}
+                            overlayId={overlayId}
+                            onChange={(key, value) => patchStyle(activeWidget.id, key, value)}
+                            onPatch={(patch) => patchWidget(activeWidget.id, patch)}
+                          />
+                        ) : (
+                          <WidgetForm
+                            groups={activeType.groups}
+                            style={resolve(activeWidget)}
+                            onChange={(key, value) => patchStyle(activeWidget.id, key, value)}
+                          />
+                        )}
                       </div>
                     ) : null}
                   </div>

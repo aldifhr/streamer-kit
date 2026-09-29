@@ -9,7 +9,7 @@
  */
 
 import type { ComponentType } from "react";
-import type { GlobalStyle, StyleMap } from "@/lib/css";
+import type { GlobalStyle, StyleMap, StyleValue } from "@/lib/css";
 
 /** Every kind the backend can emit. Mirrors apps/api/events.py. */
 export type EventKind =
@@ -104,8 +104,62 @@ export interface WidgetType {
   defaults: StyleMap;
   /** Kinds this widget subscribes to. A widget with none is a static display. */
   kinds: EventKind[];
+  /**
+   * The generated settings form, built from the control descriptors. A widget
+   * that ships with no bespoke customiser gets this for free, so a simple
+   * widget needs no editor code at all.
+   *
+   * A widget that needs more than a grid of sliders supplies a customiser
+   * instead — see lib/editor/customisers. Those live on the editor side of the
+   * boundary deliberately: a widget that imported its own customiser would pull
+   * the whole editor into the bundle that OBS loads, where none of it runs.
+   */
   groups: ControlGroup[];
   Component: ComponentType<WidgetProps>;
+}
+
+/**
+ * A widget placed in a scene.
+ *
+ * Declared here rather than in scene.ts so the widget contract — including the
+ * customiser props above — can name it without importing the scene module,
+ * which imports the registry, which imports every widget.
+ */
+export interface WidgetInstance {
+  id: string;
+  type: string;
+  enabled: boolean;
+  /** Top-left of the widget as a fraction of the scene, 0..1. */
+  x: number;
+  y: number;
+  scale: number;
+  /** Only the keys the user has actually changed, over the widget's defaults. */
+  style: StyleMap;
+}
+
+/**
+ * What a bespoke customiser gets.
+ *
+ * Deliberately no live event buffer: the editor's iframe already holds the
+ * same subscription the overlay uses, so a customiser's job is to change
+ * config and to fire test events, and the preview reacts on its own. Handing
+ * every customiser the buffer too would mean two subscriptions per scene and
+ * no way for a customiser to disagree with what is actually on screen.
+ */
+export interface CustomiserProps {
+  widget: WidgetInstance;
+  /** This widget's style with its defaults already merged in. */
+  style: StyleMap;
+  /**
+   * The scene's shared style. A customiser needs it whenever its own settings
+   * are only meaningful relative to something global — how many chat lines fit
+   * depends on the scene's font size, not on anything the chat widget owns.
+   */
+  global: GlobalStyle;
+  /** Needed to fire a test event at this overlay. */
+  overlayId: string;
+  onChange: (key: string, value: StyleValue) => void;
+  onPatch: (patch: Partial<WidgetInstance>) => void;
 }
 
 let seq = 0;

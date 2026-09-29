@@ -10,19 +10,25 @@ body {
  * ---------------------------------------------------------------------------
  * Overlay surface
  *
- * Every visual decision the overlay makes is a CSS custom property, injected
- * at runtime by `toCssVars()` in lib/config.ts. Rules below only describe
- * *structure*; nothing here hard-codes a colour, size or font. That keeps
- * themes to a single set of var values and gives users a real CSS API —
- * `--sk-font-size` and friends are all documented targets for custom CSS.
+ * Two layers of custom property, and neither hard-codes a value:
+ *
+ *   --sk-*   scene-global — typography, text colour, per-user name colour.
+ *            Emitted by globalVars() in lib/css.ts.
+ *   --w-*    per-widget — emitted as an inline style on that widget's own
+ *            element by styleProps(). Two widgets of the same type can be
+ *            styled differently in one scene without a name collision, and
+ *            the stylesheet below stays static.
+ *
+ * Rules here only describe *structure*. That keeps a theme to a set of values
+ * and gives users a real CSS API: every property below is a documented target.
  * ---------------------------------------------------------------------------
  */
+
+/* The scene. Widgets are absolutely positioned inside it by the renderer, so
+   the scene itself does no layout beyond clipping. */
 .sk-root {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
   overflow: hidden;
   font-family: var(--sk-font-family);
   font-size: var(--sk-font-size);
@@ -30,18 +36,29 @@ body {
   line-height: var(--sk-line-height);
   letter-spacing: var(--sk-letter-spacing);
   color: var(--sk-text-color);
-  padding: 12px;
+}
+
+.sk-widget {
+  position: absolute;
+  transform-origin: top left;
+}
+
+/* A widget with a glow knob gets one box-shadow value, inherited by the cards
+   inside it. Set as a single var rather than per rule so the value lives in one
+   place. */
+.sk-widget[data-glow="on"] {
+  --w-glow: 0 0 18px rgba(255, 255, 255, 0.18);
 }
 
 /* Newest message is first in the array; column-reverse pins it to the bottom
    so there is no scroll maths to maintain as messages expire. Spacing is
-   per-type margins rather than one `gap`, so chat and events can be tuned
+   per-type margins rather than one `gap`, so chat and cards can be tuned
    independently; the newest item is the first child, so its trailing margin
    is zeroed to avoid dead space under the stack. */
 .sk-list {
   display: flex;
   flex-direction: column-reverse;
-  max-width: var(--sk-chat-max-width);
+  max-width: var(--w-max-w, 460px);
   overflow: hidden;
 }
 
@@ -52,12 +69,12 @@ body {
 /* --- chat line (comments) ------------------------------------------------ */
 .sk-chat {
   /* inline hugs the text, bubble fills the column */
-  align-self: var(--sk-chat-align);
-  margin-bottom: var(--sk-chat-gap);
+  align-self: var(--w-align, flex-start);
+  margin-bottom: var(--w-gap, 4px);
   max-width: 100%;
-  border-radius: var(--sk-chat-radius);
-  background: var(--sk-chat-bg);
-  padding: var(--sk-chat-pad-y) var(--sk-chat-pad-x);
+  border-radius: var(--w-radius, 5px);
+  background: var(--w-bg, transparent);
+  padding: var(--w-pad-y, 2px) var(--w-pad-x, 6px);
   word-break: break-word;
   animation: sk-in 140ms ease-out;
 }
@@ -72,9 +89,9 @@ body {
   white-space: nowrap;
 }
 
-/* Per-user colour paints the name only. A per-row tint (all-chat's
-   --row-user-bg) is deliberately not reproduced: with hashed per-user colours
-   it turns every comment into a solid pastel block. */
+/* Per-user colour paints the name only. A per-row tint is deliberately not
+   reproduced: with hashed per-user colours it turns every comment into a
+   solid pastel block. */
 .sk-text {
   color: var(--sk-text-color);
   text-shadow: var(--sk-text-shadow);
@@ -85,15 +102,15 @@ body {
    reads as a distinct object, which is the whole point of separating them. */
 .sk-event {
   align-self: stretch;
-  margin-bottom: var(--sk-event-gap);
+  margin-bottom: var(--w-card-gap, 4px);
   max-width: 100%;
-  border-radius: var(--sk-event-radius);
-  background: var(--sk-event-bg);
-  border: var(--sk-event-border-width) solid var(--sk-event-border-color);
-  box-shadow: inset var(--sk-event-accent) 0 0 var(--sk-accent-color),
-    var(--sk-event-glow);
-  padding: var(--sk-event-pad-y) var(--sk-event-pad-x);
-  margin-left: var(--sk-event-indent);
+  border-radius: var(--w-card-radius, 8px);
+  background: var(--w-card-bg, rgba(11, 11, 15, 0.55));
+  border: var(--w-border-w, 0) solid var(--w-border-color, rgba(255, 255, 255, 0.3));
+  box-shadow: inset var(--w-accent, 2px) 0 0 var(--sk-accent-color, #ffffff),
+    var(--w-glow, none);
+  padding: var(--w-card-pad-y, 5px) var(--w-card-pad-x, 10px);
+  margin-left: var(--w-indent, 0);
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -103,35 +120,188 @@ body {
 
 .sk-event-icon {
   flex-shrink: 0;
-  font-size: var(--sk-event-icon-size);
+  font-size: var(--w-icon-size, 14px);
   line-height: 1;
   display: var(--sk-show-icons);
 }
 
 .sk-event-title {
-  font-weight: var(--sk-event-title-weight);
+  font-weight: var(--w-title-weight, 600);
   white-space: nowrap;
   text-shadow: var(--sk-text-shadow);
 }
 
 .sk-event-value {
-  font-weight: var(--sk-event-value-weight);
+  font-weight: var(--w-value-weight, 600);
   color: var(--sk-text-color);
   text-shadow: var(--sk-text-shadow);
 }
 
+/* --- alerts (standalone cards) ------------------------------------------
+   Larger and centred than the chat cards: an interrupt should be readable
+   from across the room, which is the reason this is a separate widget. */
+.sk-alerts {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--w-gap, 10px);
+  max-width: var(--w-max-w, 560px);
+}
+
+.sk-card {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--w-radius, 12px);
+  background: var(--w-bg, rgba(11, 11, 15, 0.78));
+  border: var(--w-border-w, 0) solid var(--w-border-color, rgba(255, 255, 255, 0.3));
+  box-shadow: inset var(--w-accent, 4px) 0 0 var(--sk-accent-color, #ffffff),
+    var(--w-glow, none);
+  padding: var(--w-pad-y, 12px) var(--w-pad-x, 18px);
+  text-shadow: var(--sk-text-shadow);
+  animation: sk-pop 220ms cubic-bezier(0.2, 1.2, 0.4, 1);
+}
+
+.sk-card-icon {
+  flex-shrink: 0;
+  font-size: var(--w-icon-size, 34px);
+  line-height: 1;
+  display: var(--sk-show-icons);
+}
+
+.sk-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sk-card-title {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+}
+
+.sk-card-user {
+  font-weight: var(--w-title-weight, 700);
+  font-size: 1.15em;
+}
+
+.sk-card-text {
+  color: var(--sk-text-color);
+  opacity: 0.9;
+}
+
+/* --- viewer count chip --------------------------------------------------- */
+.sk-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--w-gap, 8px);
+  border-radius: var(--w-radius, 20px);
+  background: var(--w-bg, rgba(11, 11, 15, 0.6));
+  padding: var(--w-pad-y, 7px) var(--w-pad-x, 14px);
+  text-shadow: var(--sk-text-shadow);
+}
+
+.sk-chip-icon {
+  font-size: calc(var(--w-size, 20px) * 0.8);
+  line-height: 1;
+  align-self: center;
+}
+
+.sk-chip-value {
+  font-size: var(--w-size, 20px);
+  font-weight: var(--w-weight, 700);
+  font-variant-numeric: tabular-nums;
+}
+
+.sk-chip-label {
+  font-size: var(--w-label-size, 13px);
+  opacity: 0.65;
+}
+
+/* --- goal bar ------------------------------------------------------------ */
+.sk-goal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--w-track-gap, 8px);
+  max-width: var(--w-max-w, 420px);
+  min-width: 180px;
+}
+
+.sk-goal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  text-shadow: var(--sk-text-shadow);
+}
+
+.sk-goal-label {
+  font-size: var(--w-label-size, 14px);
+  font-weight: 600;
+}
+
+.sk-goal-count {
+  font-size: var(--w-label-size, 14px);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.sk-goal-track {
+  height: var(--w-bar-height, 16px);
+  border-radius: var(--w-radius, 8px);
+  background: var(--w-bg, rgba(0, 0, 0, 0.55));
+  overflow: hidden;
+}
+
+.sk-goal-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--w-fill, #7ce8a4);
+  transition: width 320ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.sk-goal[data-done="true"] .sk-goal-fill {
+  box-shadow: 0 0 18px var(--w-fill, #7ce8a4);
+}
+
+/* --- text strip ---------------------------------------------------------- */
+.sk-text-strip {
+  display: inline-block;
+  max-width: var(--w-max-w, 520px);
+  border-radius: var(--w-radius, 6px);
+  background: var(--w-bg, rgba(11, 11, 15, 0.7));
+  padding: var(--w-pad-y, 6px) var(--w-pad-x, 12px);
+  font-size: var(--w-size, 20px);
+  font-weight: var(--w-weight, 600);
+  letter-spacing: var(--w-letter, 0);
+  text-shadow: var(--sk-text-shadow);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Visibility is a var, so the message handler never branches on config. */
-.sk-chat[data-kind="comment"] { display: var(--sk-show-comments); }
-.sk-event[data-kind="like"] { display: var(--sk-show-likes); }
-.sk-event[data-kind="gift"] { display: var(--sk-show-gifts); }
-.sk-event[data-kind="join"] { display: var(--sk-show-joins); }
+.sk-chat[data-kind="comment"] { display: var(--w-show-comment, flex); }
+.sk-event[data-kind="like"] { display: var(--w-show-like, flex); }
+.sk-event[data-kind="gift"] { display: var(--w-show-gift, flex); }
+.sk-event[data-kind="join"] { display: var(--w-show-join, flex); }
+.sk-event[data-kind="follow"] { display: var(--w-show-follow, flex); }
+.sk-event[data-kind="share"] { display: var(--w-show-share, flex); }
 
 @keyframes sk-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
 
+@keyframes sk-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+
 .app {
   @apply flex min-h-screen;
 }
-

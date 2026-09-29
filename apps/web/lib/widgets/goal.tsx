@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { selectKinds } from "@/lib/feed";
+import { selectKinds } from "./select";
 import { bool, num, str } from "./style";
 import type { WidgetProps, WidgetType } from "./types";
 

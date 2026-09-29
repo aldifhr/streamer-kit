@@ -3,7 +3,7 @@
 import { nameColor, type GlobalStyle, type StyleMap } from "@/lib/css";
 import { DEFAULT_GLOBAL, globalVars, resolveSurface, styleVars } from "@/lib/css";
 import { chatWidget } from "@/lib/widgets/chat";
-import { selectKinds } from "@/lib/feed";
+import { selectKinds } from "@/lib/widgets/select";
 import type { Entry, EventKind } from "@/lib/widgets/types";
 import type { Theme } from "@/lib/scene";
 

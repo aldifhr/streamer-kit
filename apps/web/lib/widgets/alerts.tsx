@@ -1,7 +1,7 @@
 "use client";
 
 import { nameColor } from "@/lib/css";
-import { selectKinds } from "@/lib/feed";
+import { selectKinds } from "./select";
 import { num } from "./style";
 import type { EventKind, WidgetProps, WidgetType } from "./types";
 

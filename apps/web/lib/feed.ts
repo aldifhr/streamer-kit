@@ -243,9 +243,11 @@ export function useFeed(overlayId: string): Feed {
   );
 }
 
-/** The subset of a widget's kinds present in the buffer, newest first. */
-export function selectKinds(entries: Entry[], kinds: EventKind[]): Entry[] {
-  if (kinds.length === 0) return [];
-  const set = new Set(kinds);
-  return entries.filter((e) => set.has(e.kind));
-}
+/**
+ * The subset of a widget's kinds present in the buffer lives in
+ * `widgets/select`, not here: a widget importing it from feed.ts closes the
+ * registry -> chat -> feed -> scene -> registry cycle and the registry's
+ * WIDGET_TYPES is read before it is initialised. Re-exported so existing
+ * callers keep working, but new widget code should import from the leaf.
+ */
+export { selectKinds } from "@/lib/widgets/select";

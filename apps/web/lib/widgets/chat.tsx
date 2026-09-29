@@ -1,7 +1,9 @@
 "use client";
 
 import { nameColor, type StyleMap } from "@/lib/css";
-import { selectKinds } from "@/lib/feed";
+// From the leaf, not from feed: feed -> scene -> registry -> chat would close
+// the cycle and leave WIDGET_TYPES in its temporal dead zone. See widgets/select.
+import { selectKinds } from "./select";
 import { num } from "./style";
 import type { EventKind, WidgetProps, WidgetType } from "./types";
 

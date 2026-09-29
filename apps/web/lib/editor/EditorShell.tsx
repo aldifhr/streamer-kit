@@ -96,7 +96,10 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   const [username, setUsername] = useState("");
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [section, setSection] = useState<SectionId>("theme");
+  // Opens on Widgets, not Theme. The theme only restyles the chat widget and
+  // the shared typography, so for a scene without one it is the least useful
+  // first screen — and every per-widget setting lives under Widgets anyway.
+  const [section, setSection] = useState<SectionId>("widgets");
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [viewport, setViewport] = useState<ViewportKey>("1920x1080");
@@ -352,6 +355,19 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     return () => ws.close();
   }, [overlayId, loading]);
 
+  /**
+   * Jump straight to one widget's settings.
+   *
+   * The header chips are the only always-visible statement of what the scene
+   * contains, so leaving them inert meant a scene of astronauts could only be
+   * reached by opening the Theme tab — which is entirely chat — and then
+   * finding the Widgets section by hand.
+   */
+  const focusWidget = useCallback((id: string) => {
+    setSelected(id);
+    setSection("widgets");
+  }, []);
+
   const copyUrl = async () => {
     try {
       await navigator.clipboard.writeText(`${window.location.origin}${overlayPath}`);
@@ -401,25 +417,26 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
           <span className="shrink-0 text-neutral-700">/</span>
           <span className="shrink-0 font-medium">{username ? `@${username}` : "Unnamed channel"}</span>
 
-          {/* What this scene is actually made of, on every tab.
-              Without this the editor opens on Theme — whose previews are always
-              chat — so an astronaut or goal scene looks like a chat overlay
-              until you go looking for the Widgets section. */}
+          {/* What this scene is actually made of, on every tab, and the way to
+              jump to any of it. Without this the editor opened on Theme —
+              whose previews are always chat — so an astronaut or goal scene
+              looked like a chat overlay until you went looking. */}
           <span className="hidden min-w-0 items-center gap-1.5 border-l border-white/10 pl-3 lg:flex">
             {config.widgets.map((w) => {
               const t = widgetType(w.type);
               if (!t) return null;
               return (
-                <span
+                <button
                   key={w.id}
+                  onClick={() => focusWidget(w.id)}
                   title={`${t.label} — ${t.blurb}`}
-                  className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] ${
+                  className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] transition hover:bg-white/10 ${
                     w.enabled ? "bg-white/5 text-neutral-400" : "bg-white/[0.02] text-neutral-700 line-through"
                   }`}
                 >
                   <span className="mr-1">{t.icon}</span>
                   {t.label}
-                </span>
+                </button>
               );
             })}
           </span>
@@ -509,6 +526,18 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
               <div className="space-y-4 pb-4">
                 {section === "theme" && (
                   <>
+                    {/* A theme restyles the chat widget and the shared
+                        typography. In a scene with no chat widget the preview
+                        below would be showing something that is not on screen. */}
+                    {config.widgets.some((w) => w.type === "chat") ? null : (
+                      <p className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs leading-relaxed text-neutral-500">
+                        This scene has no <span className="text-neutral-400">Chat</span> widget, so there is
+                        nothing for a theme to restyle here. A theme still sets the scene's shared
+                        typography; every widget has its own settings under{" "}
+                        <span className="text-neutral-400">Widgets</span>.
+                      </p>
+                    )}
+
                     <div className="grid gap-2.5">
                       {THEMES.map((t) => (
                         <button

@@ -171,6 +171,13 @@ export function createAstroEngine(opts: {
   let store: Record<string, Stored> = {};
   let dirty = false;
 
+  // Live viewer count as TikTok last reported it, and the roster size it was
+  // seen at. TikTok sends no per-viewer leave event — WebcastRoomUserSeqMessage
+  // carries a count and a list of ranked contributors, not the audience — so a
+  // drop in the count is the only evidence available that people have left.
+  let viewersNow = 0;
+  let viewersBaseline = 0;
+
   try {
     store = JSON.parse(localStorage.getItem(storageKey) || "{}") || {};
   } catch {
@@ -360,6 +367,47 @@ export function createAstroEngine(opts: {
   }
 
   const levelFor = (xp: number) => 1 + Math.floor(Math.sqrt(Math.max(0, xp)));
+
+  /**
+   * Retire astronauts when the viewer count falls.
+   *
+   * The count is a number, not a list of names, so a drop can only say "somebody
+   * left", never who. Two guards keep that from eating the roster on a bad
+   * reading:
+   *
+   *   - the first report only sets the baseline, because the roster is built
+   *     from joins that started arriving before the first count landed;
+   *   - a drop is ignored unless it is both a real fall and larger than the
+   *     count is noisy by. The count flickers, and a single dip during a burst
+   *     of joins is not a room emptying.
+   *
+   * Whoever goes is whoever has been quiet longest. That is a guess, but it is
+   * the best one available: a viewer who has neither chatted, gifted, liked nor
+   * followed in the longest is the one most likely to have closed the tab.
+   */
+  function retireForDrop() {
+    if (!viewersBaseline) {
+      viewersBaseline = viewersNow;
+      return;
+    }
+    const drop = viewersBaseline - viewersNow;
+    // A fall worth acting on: not rounding noise, and not a fraction of a room
+    // that is simply churning through viewers.
+    if (drop <= 0 || drop < Math.max(2, viewersBaseline * 0.02)) return;
+    viewersBaseline = viewersNow;
+
+    const gone = Math.min(drop, astros.size);
+    for (let i = 0; i < gone; i++) {
+      let quietest: Astro | null = null;
+      for (const a of astros.values()) {
+        if (!quietest || a.lastActive < quietest.lastActive) quietest = a;
+      }
+      if (!quietest) break;
+      astros.delete(quietest.id);
+      delete store[quietest.id];
+      dirty = true;
+    }
+  }
 
   function ensureAstro(userId: string, nick: string) {
     const id = String(userId || "anon");
@@ -978,15 +1026,31 @@ export function createAstroEngine(opts: {
   /**
    * The one place an overlay event becomes a change in the world.
    *
-   * `join` is deliberately absent: TikTok batches join events, so treating them
-   * as arrivals would populate the roster with viewers nobody has seen
-   * interact and burn through maxAstro in seconds.
+   * `join` does create an astronaut, and it is admitted despite the batching: on
+   * a live room join is the most frequent event by a wide margin, so a roster
+   * built from chat alone showed one figure against five thousand viewers. The
+   * cost is that joins arrive in bursts, so they spawn no bubble, no wave and no
+   * XP — a joined viewer is simply present until the viewer count says otherwise.
    */
   function handle(entry: Entry) {
     const now = performance.now();
     const nick = clean(entry.user);
 
     switch (entry.kind) {
+      case "viewers": {
+        const n = Number(entry.meta.count) || 0;
+        if (n > 0) {
+          viewersNow = n;
+          retireForDrop();
+        }
+        break;
+      }
+      case "join": {
+        // Nothing but presence: a burst of joins would otherwise fill the scene
+        // with speech bubbles and sparkle for people who have not said anything.
+        ensureAstro(entry.userId, nick);
+        break;
+      }
       case "comment": {
         const a = ensureAstro(entry.userId, nick);
         touch(a);

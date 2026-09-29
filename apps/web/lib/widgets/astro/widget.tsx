@@ -128,9 +128,10 @@ export const astroWidget: WidgetType = {
     "show-feed": true,
     censors: true,
   },
-  // join is excluded on purpose: TikTok batches it, so a busy room would fill
-  // the roster with strangers and hit the cap in seconds.
-  kinds: ["comment", "like", "follow", "share", "gift"],
+  // join is in, so the roster reflects who is actually in the room rather than
+  // only the handful who have typed something; viewers is in because it is the
+  // only leave signal TikTok sends, and it is what retires astronauts.
+  kinds: ["comment", "like", "follow", "share", "gift", "join", "viewers"],
   groups: [
     {
       title: "Roster",

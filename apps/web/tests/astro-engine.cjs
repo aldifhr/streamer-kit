@@ -161,6 +161,46 @@ engine.handle(entry(++seq, "gift", "dimas", "dimas", "Lion x1", { diamonds: 999,
 runFrames(8);
 check("rocket tier renders", drawCalls > 500, `draws=${drawCalls}`);
 
+console.log("the roster follows the room: join adds, a falling count retires");
+engine.reset();
+engine.configure({ ...cfg, space: false, pixelSize: 3, censors: false });
+engine.resize(1920, 1080);
+
+// A joined viewer exists without having said anything.
+const joined = entry(++seq, "join", "joiner", "joiner", "", { viewers: 100 });
+engine.handle(joined);
+drawCalls = 0;
+runFrames(3);
+const withJoin = drawCalls;
+check("join puts an astronaut on screen", withJoin > 300, `draws=${withJoin}`);
+
+// Fill the room, then report a much smaller audience. drawCalls per frame scales
+// with the roster, so a real drop shows up as fewer draws.
+for (let i = 0; i < 12; i++) {
+  engine.handle(entry(++seq, "join", `guest${i}`, `guest${i}`, "", { viewers: 100 }));
+}
+engine.handle(entry(++seq, "viewers", "", "", "", { count: 500 }));
+drawCalls = 0;
+runFrames(3);
+const full = drawCalls;
+
+engine.handle(entry(++seq, "viewers", "", "", "", { count: 100 }));
+drawCalls = 0;
+runFrames(3);
+const afterDrop = drawCalls;
+check("a falling viewer count retires astronauts", afterDrop < full, `full=${full} after=${afterDrop}`);
+
+// A count that wobbles by one is noise, not a room emptying, and must not cost
+// anyone their place.
+engine.handle(entry(++seq, "viewers", "", "", "", { count: 500 }));
+drawCalls = 0;
+runFrames(3);
+const restored = drawCalls;
+engine.handle(entry(++seq, "viewers", "", "", "", { count: 499 }));
+drawCalls = 0;
+runFrames(3);
+check("a one-view wobble retires nobody", drawCalls === restored, `wobble=${drawCalls} base=${restored}`);
+
 console.log("a tiny canvas does not divide by zero");
 engine.resize(40, 30);
 runFrames(3);

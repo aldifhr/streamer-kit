@@ -1,4 +1,8 @@
+import path from "node:path";
 import type { NextConfig } from "next";
+
+/** The npm workspace root, two levels above apps/web. */
+const repoRoot = path.resolve(__dirname, "../..");
 
 /**
  * No rewrites here on purpose.
@@ -17,6 +21,16 @@ import type { NextConfig } from "next";
  * to open the socket, and a hostname is not a credential. The token does not
  * come this way — see STREAMKIT_API_TOKEN in `.env.example`.
  */
-const nextConfig: NextConfig = {};
+const nextConfig: NextConfig = {
+  // This is an npm workspaces monorepo, so the app sits below the package root.
+  // Left to itself Turbopack resolves pages from the workspace root and then
+  // cannot find the app's own routes — the build compiles, then fails page
+  // collection with "Cannot find module for page", including for built-in
+  // routes like /_not-found. Naming the root fixes it.
+  turbopack: {
+    root: repoRoot,
+  },
+  outputFileTracingRoot: repoRoot,
+};
 
 export default nextConfig;

@@ -9,6 +9,7 @@ does not mean editing the file that owns routing.
 import asyncio
 import json
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -80,27 +81,18 @@ def api_token() -> str:
     return os.environ.get("STREAMKIT_TOKEN", "").strip()
 
 
-def _presented_token(request: Request) -> str:
-    header = request.headers.get("x-streamkit-token", "")
-    if header:
-        return header
-    # Query form, for the one caller that cannot set headers: the browser source
-    # URL in OBS. It is a real trade-off — the token then lands in OBS logs and
-    # screenshots — so it is only a fallback, never the preferred path.
-    return request.query_params.get("token", "")
-
-
 def token_is_valid(request: Request) -> bool:
     expected = api_token()
     if not expected:
         return True
     header = request.headers.get("x-streamkit-token", "")
-    if header == expected:
+    if header and secrets.compare_digest(header, expected):
         return True
     # Query form, for the one caller that cannot set headers: the browser source
     # URL in OBS. It is a real trade-off — the token then lands in OBS logs and
     # screenshots — so it is only a fallback, never the preferred path.
-    return request.query_params.get("token", "") == expected
+    query = request.query_params.get("token", "")
+    return bool(query) and secrets.compare_digest(query, expected)
 
 
 @app.middleware("http")
@@ -243,7 +235,7 @@ async def update_overlay(overlay_id: str, req: UpdateOverlayRequest):
     # room, so drop it; the overlay page re-requests the connection on reload.
     if username_changed:
         source = sources.get(overlay_id)
-        if source is not None and source._running:
+        if source is not None and source.is_running():
             await source.stop()
 
     return {"overlay": _summary(overlay_id, record)}
@@ -288,7 +280,7 @@ async def connect(req: ConnectRequest):
         raise HTTPException(status_code=400, detail="username is required")
 
     existing = sources.get(overlay_id)
-    if existing and existing._running and existing.username == username:
+    if existing and existing.is_running() and existing.username == username:
         # Idempotent path. The ConnectEvent for this source already fired
         # earlier, so anyone attaching now would otherwise never learn the
         # current state — push it explicitly.
@@ -305,7 +297,7 @@ async def connect(req: ConnectRequest):
 
     source = TikTokSource(username, overlay_id)
     sources[overlay_id] = source
-    source._task = asyncio.create_task(source.start())
+    source.start_background()
     return {"status": "connecting", "username": username, "overlay_id": overlay_id}
 
 

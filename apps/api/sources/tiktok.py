@@ -68,6 +68,23 @@ class TikTokSource:
             }
         return {"type": "status", "connected": False, "message": "Offline"}
 
+    def is_running(self) -> bool:
+        """Whether a connection has been attempted.
+
+        Public so the router does not read `_running` directly. Both flags are
+        internal to this class's lifecycle, and a caller reaching past the class
+        for one can desynchronise the task it does not know about.
+        """
+        return self._running
+
+    def start_background(self) -> None:
+        """Run `start()` as a task owned by this source, for `stop()` to cancel.
+
+        Assigning `_task` from outside is the same reach-around this replaces:
+        a task created elsewhere is a task `stop` may or may not know to cancel.
+        """
+        self._task = asyncio.create_task(self.start())
+
     async def start(self) -> None:
         try:
             from TikTokLive import TikTokLiveClient as Client

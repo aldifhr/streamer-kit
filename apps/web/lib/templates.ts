@@ -52,10 +52,18 @@ export const TEMPLATES: Template[] = [
   {
     id: "space",
     label: "Space",
-    blurb: "Chat over a pixel-art scene where viewers become astronauts.",
+    blurb: "Viewers become pixel astronauts. Comments show up as speech bubbles, so there is no chat column.",
+    theme: "outline",
+    widgets: ["astro"],
+    icon: "🧑‍🚀",
+  },
+  {
+    id: "space-chat",
+    label: "Space + chat",
+    blurb: "The astronaut scene, with a scrolling chat column alongside it.",
     theme: "outline",
     widgets: ["astro", "chat"],
-    icon: "🧑‍🚀",
+    icon: "🛰",
   },
   {
     id: "blank",

@@ -117,6 +117,14 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   const [justSaved, setJustSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  /**
+   * Settings panel is collapsible because it competes with the preview for the
+   * same width. A 1920px canvas fitted beside a 440px sidebar lands near 40% on
+   * a 1280px screen, which turns 15px overlay text into ~6px — the preview stops
+   * being usable for judging a scene. Collapsing gives the canvas the whole
+   * window without giving up the settings, which stay one click away.
+   */
+  const [asideOpen, setAsideOpen] = useState(true);
 
   const dirty = useMemo(() => JSON.stringify(config) !== JSON.stringify(saved), [config, saved]);
   const isDefault = useMemo(() => JSON.stringify(config) === JSON.stringify(defaultScene()), [config]);
@@ -485,6 +493,14 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     <div className="flex h-dvh flex-col overflow-hidden bg-black text-white">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-5">
         <div className="flex min-w-0 items-center gap-3 text-sm">
+          <button
+            onClick={() => setAsideOpen((v) => !v)}
+            title={asideOpen ? "Hide settings" : "Show settings"}
+            aria-label={asideOpen ? "Hide settings" : "Show settings"}
+            className="shrink-0 rounded-md border border-white/10 px-2 py-1 text-[11px] text-neutral-500 transition hover:bg-white/5 hover:text-white"
+          >
+            {asideOpen ? "◀" : "▶"}
+          </button>
           <Link href="/dashboard" className="shrink-0 text-neutral-500 transition hover:text-white">
             Dashboard
           </Link>
@@ -544,7 +560,16 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className="flex w-full shrink-0 flex-col border-b border-white/10 lg:w-[440px] lg:border-b-0 lg:border-r">
+        {/* Collapsed on desktop it collapses to zero width rather than display:none so
+            the row keeps its layout; below lg it is the stacked panel, and
+            there display:none is what actually hands the screen to the preview. */}
+        <aside
+          className={`shrink-0 flex-col border-b border-white/10 lg:border-b-0 lg:border-r ${
+            asideOpen
+              ? "flex w-full lg:w-[440px]"
+              : "hidden lg:flex lg:w-0 lg:overflow-hidden lg:border-r-0"
+          }`}
+        >
           <div className="shrink-0 border-b border-white/10 p-4">
             <input
               value={query}

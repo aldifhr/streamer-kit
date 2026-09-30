@@ -5,10 +5,10 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/web",
+    "dev": "cd apps/web && bun run dev",
     "dev:api": "cd apps/api && python main.py",
-    "build": "npm run build --workspace=apps/web",
-    "start": "npm run start --workspace=apps/web",
+    "build": "cd apps/web && bun run build",
+    "start": "cd apps/web && bun run start",
     "test:api": "cd apps/api && python test_api.py",
     "test:astro": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-engine.cjs",
     "test:astro-consume": "tsc -p apps/web/tests/tsconfig.consume.json && node apps/web/tests/astro-consume.cjs",

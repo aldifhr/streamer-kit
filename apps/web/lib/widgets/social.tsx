@@ -12,12 +12,30 @@ import type { WidgetProps, WidgetType } from "./types";
  * a readout of something happening right now, and the thing a new viewer looks
  * for — where else this person exists — is not a readout of anything.
  *
- * Rows are a single newline-separated text setting rather than a list editor.
- * A list would need a repeatable control that does not exist, and the people who
- * want six rows and the people who want two are the same person on different
- * days. Format is one per line, either `Handle` or `Label | Handle`, so the
- * common case is a bare handle and the platform icon is guessed.
+ * Rows come from two places. Each platform has its own style key, which is how
+ * almost everyone fills this in — you know your Instagram, you do not "know your
+ * row 2" — and there is still a free-text list behind it for anything the list
+ * does not cover. The two are merged at render time, platforms first in a fixed
+ * order so the overlay never reshuffles itself as things are typed.
  */
+
+/**
+ * The platforms, in the order they are drawn.
+ *
+ * Exported so the editor's customiser and the widget cannot disagree about which
+ * key holds which platform — a mismatch here would silently swallow a handle
+ * rather than fail visibly.
+ */
+export const SOCIAL_PLATFORMS = [
+  { key: "instagram", label: "Instagram", icon: "📷", placeholder: "instagram.com/username" },
+  { key: "tiktok", label: "TikTok", icon: "🎵", placeholder: "tiktok.com/@username" },
+  { key: "youtube", label: "YouTube", icon: "▶", placeholder: "youtube.com/@channel" },
+  { key: "x", label: "X", icon: "𝕏", placeholder: "x.com/username" },
+  { key: "twitch", label: "Twitch", icon: "🎮", placeholder: "twitch.tv/channel" },
+  { key: "discord", label: "Discord", icon: "💬", placeholder: "discord.gg/code" },
+  { key: "github", label: "GitHub", icon: "⌨", placeholder: "github.com/user" },
+  { key: "telegram", label: "Telegram", icon: "✈", placeholder: "t.me/channel" },
+] as const;
 
 /** Guesses the icon from the handle, which is how people write them anyway. */
 function iconFor(handle: string): string {
@@ -48,7 +66,7 @@ function Social({ style }: WidgetProps) {
   const [hover, setHover] = useState<number | null>(null);
 
   const raw = str(style, "rows", "");
-  const links = raw
+  const extra = raw
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
@@ -57,13 +75,32 @@ function Social({ style }: WidgetProps) {
       // reach for when a handle alone is cryptic.
       const [maybeLabel, maybeHandle] = line.split("|").map((s) => s.trim());
       if (maybeHandle) {
-        return { label: maybeLabel, href: maybeHandle };
+        return { label: maybeLabel, href: maybeHandle, icon: iconFor(maybeHandle) };
       }
-      return { label: "", href: maybeLabel };
-    })
-    .slice(0, num(style, "max", 6));
+      return { label: "", href: maybeLabel, icon: iconFor(maybeLabel) };
+    });
 
-  if (!links.length) return null;
+  // Platforms first, in the declared order, then the free-text rows. Deduplicated
+  // on the resolved host+path so a handle typed into the old "one per line" field
+  // before it moved to its own input does not appear twice.
+  const seen = new Set<string>();
+  const links = [
+    ...SOCIAL_PLATFORMS.filter((p) => str(style, p.key, "").trim()).map((p) => ({
+      label: "",
+      href: str(style, p.key, "").trim(),
+      icon: p.icon,
+    })),
+    ...extra,
+  ].filter((l) => {
+    const key = displayHandle(l.href).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const capped = links.slice(0, num(style, "max", 6));
+
+  if (!capped.length) return null;
 
   return (
     <div className="sk-social">
@@ -71,7 +108,7 @@ function Social({ style }: WidgetProps) {
         <div className="sk-social-title">{str(style, "title", "find me here")}</div>
       ) : null}
       <div className="sk-social-links">
-        {links.map((l, i) => {
+        {capped.map((l, i) => {
           const handle = displayHandle(l.href);
           const href = /^https?:\/\//i.test(l.href.trim()) ? l.href.trim() : `https://${l.href.trim()}`;
           return (
@@ -86,7 +123,7 @@ function Social({ style }: WidgetProps) {
               data-dim={hover !== null && hover !== i ? "true" : undefined}
             >
               {bool(style, "show-icon", true) ? (
-                <span className="sk-social-icon">{str(style, "icon", "") || iconFor(href)}</span>
+                <span className="sk-social-icon">{str(style, "icon", "") || l.icon}</span>
               ) : null}
               <span className="sk-social-handle">{l.label || handle}</span>
             </a>
@@ -119,18 +156,20 @@ export const socialWidget: WidgetType = {
     max: 6,
     // Placeholder content so the widget is visible before it has been filled in
     // — an empty box teaches nothing about what it is for.
-    rows: "instagram.com/username\ntiktok.com/@username\nyoutube.com/@channel",
+    instagram: "instagram.com/username",
+    tiktok: "tiktok.com/@username",
+    youtube: "youtube.com/@channel",
   },
   kinds: [],
   groups: [
     {
-      title: "Links",
+      title: "Other links",
       controls: [
         {
           kind: "text",
           key: "rows",
-          label: "One per line (Label | handle)",
-          placeholder: "instagram.com/username",
+          label: "Anything else (one per line)",
+          placeholder: "Label | example.com/me",
         },
         { kind: "number", key: "max", label: "How many", min: 1, max: 12 },
       ],

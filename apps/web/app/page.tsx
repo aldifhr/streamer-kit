@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ScenePreview } from "@/lib/landing/ScenePreview";
 import { heroScene } from "@/lib/landing/scenes";
 import { ThemeSwatch } from "@/lib/editor/ThemeSwatch";
-import { TEMPLATES } from "@/lib/templates";
+
 import { THEMES } from "@/lib/scene";
 import { WIDGET_LIST } from "@/lib/widgets/registry";
 
@@ -178,21 +178,9 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Templates, from the same list the New dialog reads */}
-            <div className="mt-16">
-              <h3 className="text-sm font-semibold text-neutral-400">Or start from a template</h3>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => (
-                  <span
-                    key={t.id}
-                    className="rounded-lg border border-white/10 px-3 py-2 text-xs text-neutral-400"
-                  >
-                    <span className="mr-1.5">{t.icon}</span>
-                    {t.label}
-                  </span>
-                ))}
-              </div>
-            </div>
+            {/* No templates any more. Each overlay is one widget with its own URL,
+                so the thing to choose is the widget — and the grid above already
+                is that list, with each one's description. */}
           </div>
         </section>
 

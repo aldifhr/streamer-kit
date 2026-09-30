@@ -1,16 +1,34 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { bool, num, str } from "@/lib/widgets/style";
 import type { WidgetProps, WidgetType } from "@/lib/widgets/types";
 import { takeNew } from "@/lib/widgets/astro/consume";
 import { createAstroEngine, DEFAULT_ASTRO_CONFIG, type AstroConfig, type AstroEngine } from "./engine";
+/**
+ * Hard ceiling on how many aliens stand on screen at once.
+ *
+ * Ten, and not a setting: at 45 the scene was one repaint of 45 sprites, 45 name
+ * plates and a full starfield every frame, and it visibly dropped frames on the
+ * machine that also runs the game and the encoder. Anything more than ten and the
+ * crowd stops reading as a crowd.
+ *
+ * Applied here rather than only in the editor so a config saved before this
+ * existed — every scene that once had the old default of 45 — is clamped on the
+ * way in instead of quietly keeping a roster nobody can look at.
+ */
+const MAX_ALIENS = 10;
+
+const maxAstroOf = (style: Record<string, unknown>) =>
+  num(style, "max-astro", DEFAULT_ASTRO_CONFIG.maxAstro);
+const clampAstro = (n: number) => Math.max(1, Math.min(MAX_ALIENS, Math.round(n)));
+
 /** Reads the widget's style bag into the engine's own config shape. */
 function toConfig(style: Record<string, unknown>): AstroConfig {
   const list = str(style, "bad-words", "");
   return {
     ...DEFAULT_ASTRO_CONFIG,
-    maxAstro: num(style, "max-astro", DEFAULT_ASTRO_CONFIG.maxAstro),
+    maxAstro: clampAstro(maxAstroOf(style)),
     sleepAfterMs: num(style, "sleep-after", DEFAULT_ASTRO_CONFIG.sleepAfterMs) * 1000,
     despawnAfterMs: num(style, "despawn-after", DEFAULT_ASTRO_CONFIG.despawnAfterMs) * 1000,
     promoteGift: num(style, "promote-gift", DEFAULT_ASTRO_CONFIG.promoteGift),
@@ -42,11 +60,6 @@ function toConfig(style: Record<string, unknown>): AstroConfig {
  */
 function Astro({ style, entries, sceneId }: WidgetProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Stacked over the 2D canvas and transparent. Omitted from the DOM when the
-  // browser will not give us a WebGL context — the engine then draws everything
-  // itself, so the overlay still works.
-  const layerRef = useRef<HTMLCanvasElement>(null);
-  const [use3d, setUse3d] = useState(true);
   const engineRef = useRef<AstroEngine | null>(null);
   // Entries already handed over, so a re-render caused by anything other than a
   // new message does not replay the whole buffer into the world.
@@ -56,20 +69,24 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // No layerCanvas: the astronauts are drawn by the engine's own 2D path.
+    //
+    // The WebGL layer is still in the tree (lib/widgets/astro/three-layer.ts) and
+    // the engine still mounts it when a caller passes a canvas, but this widget
+    // no longer does. It reported itself as mounted, skipped the 2D bodies, and
+    // then drew nothing — the scene showed name plates and levels with no
+    // astronauts under them — while costing a WebGL context, a second full-frame
+    // composite and a texture rebake per walk cycle on every stream. The 2D path
+    // is what the standalone overlay this was ported from always drew.
     const engine = createAstroEngine({
       canvas,
-      layerCanvas: layerRef.current ?? undefined,
       // Namespaced per scene: two overlays sharing a browser profile would
-      // otherwise share one roster, and astronauts would appear in the wrong
+      // otherwise share one roster, and aliens would appear in the wrong
       // stream.
-      storageKey: `astro_pixel_v1:${sceneId}`,
+      storageKey: `alien_pixel_v1:${sceneId}`,
       config: toConfig(style),
     });
     engineRef.current = engine;
-    // If the layer could not mount, take the canvas out of the DOM. It would
-    // otherwise sit on top of a working overlay as an empty box and read to the
-    // streamer as a broken scene — the exact symptom the 2D path exists to avoid.
-    if (layerRef.current && !engine.using3D()) setUse3d(false);
 
     const measure = () => {
       const r = canvas.getBoundingClientRect();
@@ -113,28 +130,22 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
     for (const entry of fresh) engine.handle(entry);
   }, [entries]);
 
-  return (
-    <>
-      {/* The 2D scene. Always present: it draws the background, and when the 3D
-          layer is unavailable it draws the astronauts too. */}
-      <canvas ref={canvasRef} className="sk-astro-canvas" />
-      {/* The 3D layer. Rendered only while it is in use — a WebGL canvas that
-          failed to get a context is a black box sitting on top of a working
-          overlay, which looks exactly like a broken stream. */}
-      {use3d && <canvas ref={layerRef} className="sk-layer" aria-hidden />}
-    </>
-  );
+  return <canvas ref={canvasRef} className="sk-astro-canvas" />;
 }
 
 export const astroWidget: WidgetType = {
+  // `astro` stays the id even though the widget is called Aliens: it is what
+  // saved scenes and templates store, and renaming it would orphan every scene
+  // that already has one. Same for the style keys below (`max-astro`, and so
+  // on) — they are persisted in each overlay's config.
   id: "astro",
-  label: "Astronauts",
-  icon: "🧑‍🚀",
-  blurb: "Viewers drift around as pixel astronauts, earning XP and collecting crates.",
+  label: "Aliens",
+  icon: "👾",
+  blurb: "Viewers drift around as pixel aliens, earning XP and collecting crates.",
   unique: true,
   fill: true,
   defaults: {
-    "max-astro": 45,
+    "max-astro": MAX_ALIENS,
     "sleep-after": 180,
     "despawn-after": 600,
     "promote-gift": 10,
@@ -161,7 +172,7 @@ export const astroWidget: WidgetType = {
     {
       title: "Roster",
       controls: [
-        { kind: "number", key: "max-astro", label: "Max on screen", min: 5 },
+        { kind: "number", key: "max-astro", label: "Max on screen", min: 1, max: MAX_ALIENS },
         { kind: "range", key: "sleep-after", label: "Sleep after", min: 30, max: 600, step: 30, suffix: "s" },
         { kind: "range", key: "despawn-after", label: "Leave after", min: 60, max: 3600, step: 60, suffix: "s" },
       ],

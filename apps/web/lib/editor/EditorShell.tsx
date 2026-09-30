@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiFetch, wsUrl } from "@/lib/api";
-import { usePreviewMessages } from "@/lib/drag-listen";
-import { round4, type WidgetMovedMessage } from "@/lib/drag";
 import { append, clock, summariseEvent, type LogLine } from "@/lib/socket-log";
 import { DEFAULT_GLOBAL, type StyleMap, type StyleValue } from "@/lib/css";
 import {
@@ -14,16 +12,38 @@ import {
   normaliseScene,
   resolve,
   themedStyle,
+  widgetFromScene,
   type SceneConfig,
   type WidgetInstance,
 } from "@/lib/scene";
-import { WIDGET_LIST, widgetType } from "@/lib/widgets/registry";
+import { widgetType } from "@/lib/widgets/registry";
 import type { ConnectionStatus } from "@/lib/feed";
 import { WidgetForm } from "./ControlForm";
 import { customiserFor } from "./customisers/registry";
 import { ThemeSwatch } from "./ThemeSwatch";
 import { TriggerPanel } from "./TriggerPanel";
 import { Field, Range, Segmented, Toggle, inputCls } from "./controls";
+
+/**
+ * Reduce a scene to the one widget an overlay is allowed to have.
+ *
+ * Records written before the split are whole scenes and can hold several widgets
+ * — the live "ajoy" overlay holds an alien scene and a goal bar. There is nowhere
+ * to put the extras now that a record is one widget, so the first is kept and the
+ * rest are named in a notice rather than dropped in silence. The user then makes
+ * one overlay per leftover widget, which is the whole point of the split.
+ */
+function oneWidget(scene: SceneConfig, notice: (message: string) => void): SceneConfig {
+  if (scene.widgets.length <= 1) return scene;
+  const [first, ...rest] = scene.widgets;
+  const names = rest.map((w) => widgetType(w.type)?.label ?? w.type).join(", ");
+  notice(
+    `This overlay used to hold ${scene.widgets.length} widgets. It now holds only ${
+      widgetType(first.type)?.label ?? first.type
+    } — create another overlay for: ${names}.`,
+  );
+  return { ...scene, widgets: [first] };
+}
 
 const VIEWPORTS = {
   "1920x1080": { label: "1080p", w: 1920, h: 1080 },
@@ -40,19 +60,19 @@ const ZOOMS: { value: Zoom; label: string }[] = [
   { value: 1, label: "100%" },
 ];
 
-type SectionId = "theme" | "channel" | "widgets" | "typography" | "colours" | "canvas" | "trigger" | "css";
+type SectionId = "widget" | "channel" | "theme" | "typography" | "colours" | "canvas" | "trigger" | "css";
 
 const NAV: { group: string; items: { id: SectionId; label: string; keys: string[] }[] }[] = [
   {
     group: "Setup",
     items: [
-      { id: "theme", label: "Theme", keys: ["theme", "preset", "style"] },
+      { id: "widget", label: "Widget", keys: ["widget", "style", "size", "layout", "roster", "reward"] },
       { id: "channel", label: "Channel", keys: ["username", "channel", "tiktok", "connect", "live"] },
-      { id: "widgets", label: "Widgets", keys: ["widget", "add", "layer", "position", "scene"] },
+      { id: "theme", label: "Theme", keys: ["theme", "preset", "style"] },
     ],
   },
   {
-    group: "Scene",
+    group: "Look",
     items: [
       { id: "typography", label: "Typography", keys: ["font", "type", "size", "weight", "line", "letter", "uppercase", "outline"] },
       { id: "colours", label: "Colours", keys: ["colour", "color", "text", "username", "accent"] },
@@ -69,15 +89,20 @@ const NAV: { group: string; items: { id: SectionId; label: string; keys: string[
 ];
 
 const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
-  theme: {
-    title: "Theme",
-    blurb: "Restyles the chat widget and the scene's shared typography. Each widget keeps its own controls.",
+  widget: {
+    // Replaced with the widget's own name once it is known; this is the
+    // fallback for a record whose type no longer exists in this build.
+    title: "Widget",
+    blurb: "This overlay's widget and all of its settings.",
   },
   channel: { title: "Channel", blurb: "Point this overlay at a TikTok Live room. It connects on its own." },
-  widgets: { title: "Widgets", blurb: "What this overlay is made of, and where each piece sits." },
-  typography: { title: "Typography", blurb: "Shared by every widget. Per-widget sizes live under the widget." },
-  colours: { title: "Colours", blurb: "Text and username colours, shared across the scene." },
-  canvas: { title: "Canvas", blurb: "The scene itself." },
+  theme: {
+    title: "Theme",
+    blurb: "Restyles the chat widget and the overlay's shared typography. Other widgets keep their own look.",
+  },
+  typography: { title: "Typography", blurb: "Shared across the overlay. Per-widget sizes live under the widget." },
+  colours: { title: "Colours", blurb: "Text and username colours, shared across the overlay." },
+  canvas: { title: "Canvas", blurb: "The frame itself, and how much padding sits inside it." },
   trigger: { title: "Test alert", blurb: "Push an event by hand, without waiting for a live one." },
   css: { title: "Custom CSS", blurb: "Every --sk-* and --w-* custom property is a target." },
 };
@@ -103,8 +128,16 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   // Opens on Widgets, not Theme. The theme only restyles the chat widget and
   // the shared typography, so for a scene without one it is the least useful
   // first screen — and every per-widget setting lives under Widgets anyway.
-  const [section, setSection] = useState<SectionId>("widgets");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [section, setSection] = useState<SectionId>("widget");
+  /**
+   * Said once, when a pre-split record is opened.
+   *
+   * Kept apart from `error` because it is not a failure: the overlay loads and
+   * works, it just used to hold more than the one widget a record can hold now,
+   * and the extras need overlays of their own. Putting it where errors go would
+   * tell the streamer their overlay is broken when it is not.
+   */
+  const [splitNotice, setSplitNotice] = useState<string | null>(null);
   /** What the overlay socket is actually receiving, newest at the bottom. */
   const [log, setLog] = useState<LogLine[]>([]);
   const nextId = useRef(0);
@@ -139,6 +172,16 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState({ width: 0, height: 0 });
 
+  /*
+   * Measured, not assumed.
+   *
+   * `loading` is in the deps because the stage does not exist while the spinner
+   * is up: the effect ran once on mount, found `stageRef.current` null, and —
+   * with an empty dep list — never ran again. Nothing ever resized the preview
+   * from its 300x150 default, so "Fit" fell back to the hardcoded 0.35 and every
+   * overlay was judged at a third of its size. Re-attaching after the load is the
+   * whole fix.
+   */
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
@@ -147,16 +190,15 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [loading]);
 
   useEffect(() => {
     fetch(`/api/overlays/${overlayId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("not found"))))
       .then((data) => {
-        const scene = normaliseScene(data.config);
+        const scene = oneWidget(normaliseScene(data.config), setSplitNotice);
         setConfig(scene);
         setSaved(scene);
-        setSelected(scene.widgets[0]?.id ?? null);
         if (data.username) setUsername(data.username);
         setLoading(false);
       })
@@ -175,7 +217,9 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       const res = await apiFetch(`/api/overlays/${overlayId}/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config }),
+        // Stored as one widget, not as a scene. The editor still thinks in scenes
+        // internally, so this is the one place the two shapes meet.
+        body: JSON.stringify({ config: widgetFromScene(config) }),
       });
       if (!res.ok) throw new Error(`save failed (${res.status})`);
       setSaved(config);
@@ -198,13 +242,15 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
    * Back to library defaults, not to the last save — those are different
    * actions. Deliberately does not POST: it marks the overlay dirty so the
    * reset can still be backed out with Revert before it is committed.
+   *
+   * Defaults *for this widget*, not the old single-chat scene: resetting an alien
+   * overlay to a chat widget would replace the thing being edited.
    */
   const resetToDefaults = useCallback(() => {
-    const fresh = defaultScene();
-    setConfig(fresh);
-    setSelected(fresh.widgets[0]?.id ?? null);
+    const type = config.widgets[0]?.type ?? "chat";
+    setConfig({ ...defaultScene(), widgets: [makeWidget(type)] });
     setConfirmReset(false);
-  }, []);
+  }, [config.widgets]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -234,35 +280,6 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     }));
   }, []);
 
-  /**
-   * Drag on the canvas.
-   *
-   * The preview is a real iframe, so the pointer lands inside it and the editor
-   * never sees a move. The overlay measures the drag against its own box and
-   * posts the result as fractions; we turn those back into x/y. Trusting the
-   * numbers rather than recomputing them is what keeps the widget under the
-   * cursor at any zoom — the iframe is CSS-scaled here, so editor-side maths
-   * would have to undo the scale and could drift.
-   */
-  const [preview, setPreview] = useState<Window | null>(null);
-
-  const onCanvasMove = useCallback(
-    (m: WidgetMovedMessage) => {
-      // Rounded to four places: a drag emits a message per pointer move, and
-      // the saved config is compared for equality elsewhere, so a long tail of
-      // digits would show up as a dirty state that never settles.
-      patchWidget(m.id, { x: round4(m.x), y: round4(m.y) });
-      setSelected(m.id);
-    },
-    [patchWidget],
-  );
-
-  usePreviewMessages({
-    frame: preview,
-    onMove: onCanvasMove,
-    onSelect: setSelected,
-  });
-
   const patchStyle = useCallback(
     (id: string, key: string, value: StyleValue) => {
       setConfig((prev) => ({
@@ -289,32 +306,6 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       // theme are not preserved, which is the same contract the old editor had.
       widgets: prev.widgets.map((w) => ({ ...w, style: themedStyle(w.type, themeId) })),
     }));
-  }, []);
-
-  const addWidget = useCallback(
-    (type: string) => {
-      const def = widgetType(type);
-      if (!def) return;
-      // A unique widget is one that cannot be sensibly stacked on itself: two
-      // astronaut scenes would both be full-canvas and would draw over each
-      // other, and two viewer counts in the same corner is a layout mistake
-      // rather than a choice. The second one is refused, and the button is
-      // disabled below so the refusal is visible before the click.
-      if (def.unique && config.widgets.some((w) => w.type === type)) return;
-      const widget = makeWidget(type);
-      setConfig((prev) => ({ ...prev, widgets: [...prev.widgets, widget] }));
-      setSelected(widget.id);
-      setSection("widgets");
-    },
-    [config.widgets],
-  );
-
-  const removeWidget = useCallback((id: string) => {
-    setConfig((prev) => {
-      const widgets = prev.widgets.filter((w) => w.id !== id);
-      return { ...prev, widgets: widgets.length > 0 ? widgets : prev.widgets };
-    });
-    setSelected((prev) => (prev === id ? null : prev));
   }, []);
 
   /* ----------------------------------------------------------- connection */
@@ -434,18 +425,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
     return () => ws.close();
   }, [overlayId, loading]);
 
-  /**
-   * Jump straight to one widget's settings.
-   *
-   * The header chips are the only always-visible statement of what the scene
-   * contains, so leaving them inert meant a scene of astronauts could only be
-   * reached by opening the Theme tab — which is entirely chat — and then
-   * finding the Widgets section by hand.
-   */
-  const focusWidget = useCallback((id: string) => {
-    setSelected(id);
-    setSection("widgets");
-  }, []);
+  
 
   const copyUrl = async () => {
     try {
@@ -475,7 +455,9 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   const fitScale = stage.width && stage.height ? Math.min(stage.width / w, stage.height / h) : 0.35;
   const scale = zoom === "fit" ? fitScale : zoom;
 
-  const activeWidget = config.widgets.find((w2) => w2.id === selected) ?? null;
+  // The one widget this overlay is. There is no selection to make: a record holds
+// exactly one, so the editor shows its settings and nothing to choose between.
+const activeWidget = config.widgets[0] ?? null;
   const activeType = activeWidget ? widgetType(activeWidget.type) : null;
   // Null when this widget has no bespoke customiser, which is the signal to
   // fall back to the generated form.
@@ -507,29 +489,19 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
           <span className="shrink-0 text-neutral-700">/</span>
           <span className="shrink-0 font-medium">{username ? `@${username}` : "Unnamed channel"}</span>
 
-          {/* What this scene is actually made of, on every tab, and the way to
-              jump to any of it. Without this the editor opened on Theme —
-              whose previews are always chat — so an astronaut or goal scene
-              looked like a chat overlay until you went looking. */}
-          <span className="hidden min-w-0 items-center gap-1.5 border-l border-white/10 pl-3 lg:flex">
-            {config.widgets.map((w) => {
-              const t = widgetType(w.type);
-              if (!t) return null;
-              return (
-                <button
-                  key={w.id}
-                  onClick={() => focusWidget(w.id)}
-                  title={`${t.label} — ${t.blurb}`}
-                  className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] transition hover:bg-white/10 ${
-                    w.enabled ? "bg-white/5 text-neutral-400" : "bg-white/[0.02] text-neutral-700 line-through"
-                  }`}
-                >
-                  <span className="mr-1">{t.icon}</span>
-                  {t.label}
-                </button>
-              );
-            })}
-          </span>
+          {/* What this overlay is. One widget per overlay now, so it is a label
+              rather than a tab bar — but it still says which widget is on
+              screen on every tab, which the Theme tab in particular used to
+              get wrong by showing chat for an alien scene. */}
+          {activeType ? (
+            <span
+              title={activeType.blurb}
+              className="hidden shrink-0 items-center gap-1.5 border-l border-white/10 pl-3 text-[11px] text-neutral-400 lg:flex"
+            >
+              <span>{activeType.icon}</span>
+              {activeType.label}
+            </span>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
@@ -618,22 +590,36 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                 <p className="text-[10px] font-medium uppercase tracking-widest text-neutral-600">
                   {NAV.find((g) => g.items.some((i) => i.id === section))?.group}
                 </p>
-                <h2 className="mt-0.5 text-base font-semibold">{SECTION_META[section].title}</h2>
-                <p className="mt-0.5 text-xs text-neutral-500">{SECTION_META[section].blurb}</p>
+                {/*
+                  The Widget section is titled after the widget rather than
+                  after the word "widget": one overlay is one widget now, so the
+                  section *is* that widget, and "Aliens" says which thing is
+                  being edited where "Widgets" used to suggest a list.
+                */}
+                <h2 className="mt-0.5 text-base font-semibold">
+                  {section === "widget" && activeType
+                    ? `${activeType.icon} ${activeType.label}`
+                    : SECTION_META[section].title}
+                </h2>
+                <p className="mt-0.5 text-xs text-neutral-500">
+                  {section === "widget" && activeType ? activeType.blurb : SECTION_META[section].blurb}
+                </p>
               </header>
 
               <div className="space-y-4 pb-4">
                 {section === "theme" && (
                   <>
-                    {/* A theme restyles the chat widget and the shared
-                        typography. In a scene with no chat widget the preview
-                        below would be showing something that is not on screen. */}
-                    {config.widgets.some((w) => w.type === "chat") ? null : (
+                    {/* A theme restyles the chat widget's own style plus the shared
+                        typography. Every other widget keeps its artwork and
+                        takes only the typography, so the swatches below are
+                        drawn by that widget rather than by a chat mock. */}
+                    {activeType?.id === "chat" ? null : (
                       <p className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs leading-relaxed text-neutral-500">
-                        This scene has no <span className="text-neutral-400">Chat</span> widget, so there is
-                        nothing for a theme to restyle here. A theme still sets the scene's shared
-                        typography; every widget has its own settings under{" "}
-                        <span className="text-neutral-400">Widgets</span>.
+                        Each swatch below is drawn by{" "}
+                        <span className="text-neutral-400">{activeType?.label ?? "your widget"}</span>{" "}
+                        itself. A theme changes the shared typography and colours around it, not its own
+                        artwork — those settings are under{" "}
+                        <span className="text-neutral-400">{SECTION_META.widget.title}</span>.
                       </p>
                     )}
 
@@ -646,7 +632,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                             config.theme === t.id ? "border-white/60" : "border-white/10 hover:border-white/30"
                           }`}
                         >
-                          <ThemeSwatch theme={t} />
+                          <ThemeSwatch theme={t} type={activeType?.id} />
                           <span className="flex items-center justify-between border-t border-white/5 px-4 py-2.5">
                             <span className="text-xs font-medium">{t.name}</span>
                             {config.theme === t.id ? (
@@ -657,14 +643,16 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                       ))}
                     </div>
 
-                    {/* The preview is the chat widget because that is what a theme
-                        carries. Saying so beats letting a user conclude their
-                        astronaut or goal scene ignored the theme. */}
-                    <p className="border-t border-white/10 pt-4 text-xs leading-relaxed text-neutral-600">
-                      The preview above is the chat widget, which is what a theme restyles. Widgets
-                      that draw their own artwork keep it — pick a theme for the mood, then adjust
-                      each widget under <span className="text-neutral-500">Widgets</span>.
-                    </p>
+                    {/* Only on a chat overlay. Elsewhere the note above already
+                        said a theme has nothing to restyle, and saying it
+                        twice would be saying nothing twice. */}
+                    {activeType?.id === "chat" ? (
+                      <p className="border-t border-white/10 pt-4 text-xs leading-relaxed text-neutral-600">
+                        The preview above is the chat widget, which is what a theme restyles. Pick a
+                        theme for the mood, then adjust the widget under{" "}
+                        <span className="text-neutral-500">{SECTION_META.widget.title}</span>.
+                      </p>
+                    ) : null}
                   </>
                 )}
 
@@ -700,6 +688,20 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                       )}
                     </div>
                     {error ? <p className="mt-2 text-xs text-neutral-500">{error}</p> : null}
+
+                    {/*
+                      A pre-split record said out loud, once.
+
+                      Not an error: the overlay loads and works. But it used to
+                      be a scene holding several widgets, and now a record holds
+                      one, so the extras exist nowhere — and a streamer who does
+                      not know that will assume the editor lost them.
+                    */}
+                    {splitNotice ? (
+                      <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.06] p-3 text-xs leading-relaxed text-amber-100/70">
+                        {splitNotice}
+                      </p>
+                    ) : null}
 
                     {/*
                       What the socket is actually receiving.
@@ -753,110 +755,10 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                   </div>
                 )}
 
-                {section === "widgets" && (
+                {section === "widget" && (
                   <div className="space-y-4">
-                    <div className="flex flex-wrap gap-1.5">
-                      {WIDGET_LIST.map((t) => {
-                        // Already in the scene, and this type allows only one.
-                        const taken = t.unique && config.widgets.some((w) => w.type === t.id);
-                        return (
-                          <button
-                            key={t.id}
-                            onClick={() => addWidget(t.id)}
-                            disabled={taken}
-                            title={taken ? `${t.label} is already in this scene` : t.blurb}
-                            className="rounded-lg border border-white/15 px-2.5 py-1.5 text-xs text-neutral-300 transition hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:border-white/5 disabled:text-neutral-700"
-                          >
-                            <span className="mr-1">{t.icon}</span>
-                            {t.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="space-y-1.5 border-t border-white/10 pt-4">
-                      {config.widgets.map((w) => {
-                        const t = widgetType(w.type);
-                        const isActive = w.id === selected;
-                        return (
-                          <div
-                            key={w.id}
-                            className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition ${
-                              isActive ? "border-white/40 bg-white/5" : "border-white/10"
-                            }`}
-                          >
-                            <button
-                              onClick={() => setSelected(w.id)}
-                              className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
-                            >
-                              <span>{t?.icon}</span>
-                              <span className={`truncate ${w.enabled ? "" : "text-neutral-600 line-through"}`}>
-                                {t?.label ?? w.type}
-                              </span>
-                            </button>
-                            <Toggle
-                              label={`Show ${t?.label ?? w.type}`}
-                              checked={w.enabled}
-                              onChange={(v) => patchWidget(w.id, { enabled: v })}
-                            />
-                            {config.widgets.length > 1 ? (
-                              <button
-                                onClick={() => removeWidget(w.id)}
-                                aria-label={`Remove ${t?.label ?? w.type}`}
-                                className="shrink-0 rounded px-1.5 text-neutral-600 transition hover:text-white"
-                              >
-                                ✕
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-
                     {activeWidget && activeType ? (
-                      <div className="space-y-4 border-t border-white/10 pt-4">
-                        <div>
-                          <p className="mb-1 text-sm font-medium">
-                            {activeType.icon} {activeType.label}
-                          </p>
-                          <p className="text-xs text-neutral-500">{activeType.blurb}</p>
-                        </div>
-
-                        {/* A fill widget owns the whole frame, so placement has
-                            no meaning for it and offering the sliders would
-                            only produce settings that do nothing. */}
-                        {activeType.fill ? null : (
-                          <div className="space-y-4">
-                            <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-600">
-                              Position
-                            </p>
-                            <Field label={`Horizontal — ${Math.round(activeWidget.x * 100)}%`}>
-                              <Range
-                                min={0}
-                                max={100}
-                                value={Math.round(activeWidget.x * 100)}
-                                onChange={(v) => patchWidget(activeWidget.id, { x: v / 100 })}
-                              />
-                            </Field>
-                            <Field label={`Vertical — ${Math.round(activeWidget.y * 100)}%`}>
-                              <Range
-                                min={0}
-                                max={100}
-                                value={Math.round(activeWidget.y * 100)}
-                                onChange={(v) => patchWidget(activeWidget.id, { y: v / 100 })}
-                              />
-                            </Field>
-                            <Field label={`Scale — ${activeWidget.scale.toFixed(2)}x`}>
-                              <Range
-                                min={30}
-                                max={300}
-                                value={Math.round(activeWidget.scale * 100)}
-                                onChange={(v) => patchWidget(activeWidget.id, { scale: v / 100 })}
-                              />
-                            </Field>
-                          </div>
-                        )}
-
+                      <>
                         {/* A widget either brings its own customiser or is given
                             the form generated from its control descriptors. Both
                             read the same resolved style, so a bespoke customiser
@@ -877,8 +779,13 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                             onChange={(key, value) => patchStyle(activeWidget.id, key, value)}
                           />
                         )}
-                      </div>
-                    ) : null}
+                      </>
+                    ) : (
+                      <p className="text-xs text-neutral-500">
+                        This overlay has no widget. Create one from the dashboard, picking the
+                        widget you want.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1199,9 +1106,15 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
             }`}
           >
             <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
+              {/*
+                The exact URL that goes into OBS. No `?edit=1` and no key:
+                the editor does not touch the preview any more — there is no
+                position to drag — so what is on screen is byte-for-byte what
+                OBS will load. That was the whole argument for a real iframe,
+                and dropping the parameter keeps it true.
+              */}
               <iframe
-                ref={(el) => setPreview((el as HTMLIFrameElement | null)?.contentWindow ?? null)}
-                src={`${overlayPath}?edit=1`}
+                src={overlayPath}
                 title="Overlay preview"
                 className="origin-top-left border-0"
                 style={{ width: w, height: h, transform: `scale(${scale})` }}

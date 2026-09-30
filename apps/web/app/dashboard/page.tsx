@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
-import { normaliseScene } from "@/lib/scene";
-import { TEMPLATES, sceneFromTemplate } from "@/lib/templates";
+import { defaultWidgetConfig, normaliseScene } from "@/lib/scene";
 import { WIDGET_LIST, widgetType } from "@/lib/widgets/registry";
 
 interface Overlay {
@@ -17,13 +16,19 @@ interface Overlay {
 }
 
 interface Row extends Overlay {
-  /** Widget types present, derived from the config rather than stored twice. */
-  widgets: string[];
+  /**
+   * The one widget this overlay is.
+   *
+   * Derived from the config rather than stored twice, and read through
+   * `normaliseScene` so a record written before the split still reports what it
+   * actually holds instead of going blank.
+   */
+  widget: string;
 }
 
 /**
  * Widget types offered as dashboard filters, in registry order so the chips
- * match the order the "add widget" menu uses.
+ * match the order the picker uses.
  */
 const FILTERS = WIDGET_LIST.map((w) => ({ id: w.id, label: w.label, icon: w.icon }));
 
@@ -32,9 +37,9 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  // Named rather than indexed, so reordering the list cannot silently change
-  // what a new overlay starts as.
-  const [template, setTemplate] = useState("chat-alerts");
+  // Named by widget id rather than indexed, so reordering the registry cannot
+  // silently change what a new overlay starts as.
+  const [type, setType] = useState("chat");
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -43,13 +48,10 @@ export default function Dashboard() {
     fetch("/api/overlays")
       .then((r) => r.json())
       .then((data) => {
-        // The list endpoint already returns each full config, so the widget
-        // list is derived here rather than maintained as a second field that
-        // could disagree with it.
         setOverlays(
           ((data.overlays || []) as Overlay[]).map((o) => ({
             ...o,
-            widgets: normaliseScene(o.config).widgets.map((w) => w.type),
+            widget: normaliseScene(o.config).widgets[0]?.type ?? "chat",
           })),
         );
       })
@@ -79,16 +81,13 @@ export default function Dashboard() {
       const res = await apiFetch("/api/overlays", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // The scene is resolved here and posted whole, so creating an overlay is
-        // one request instead of create-then-save.
-        body: JSON.stringify({ name: trimmed, config: sceneFromTemplate(template) }),
+        // An overlay is one widget, so this is that widget at its defaults and
+        // nothing else.
+        body: JSON.stringify({ name: trimmed, config: defaultWidgetConfig(type) }),
       });
       if (!res.ok) return;
       const data = await res.json();
-      setOverlays((prev) => [
-        ...prev,
-        { ...data.overlay, widgets: normaliseScene(data.overlay.config).widgets.map((w) => w.type) },
-      ]);
+      setOverlays((prev) => [...prev, { ...data.overlay, widget: type }]);
       close();
     } finally {
       setCreating(false);
@@ -111,14 +110,14 @@ export default function Dashboard() {
   };
 
   const visible = useMemo(
-    () => (filter ? overlays.filter((o) => o.widgets.includes(filter)) : overlays),
+    () => (filter ? overlays.filter((o) => o.widget === filter) : overlays),
     [overlays, filter],
   );
 
   // A chip that would show nothing is worse than no chip: only offer filters
   // that match at least one overlay.
   const available = useMemo(
-    () => FILTERS.filter((f) => overlays.some((o) => o.widgets.includes(f.id))),
+    () => FILTERS.filter((f) => overlays.some((o) => o.widget === f.id)),
     [overlays],
   );
 
@@ -206,16 +205,21 @@ export default function Dashboard() {
                   </p>
                 </div>
 
-                {/* What is actually on the stream, read from the scene. Doubles
-                    as the answer to "which URL goes in OBS" — there is one per
-                    overlay, and this card is it. */}
+                {/* What this overlay is, and the answer to "which URL goes in OBS" —
+                    there is one browser source per overlay, and this card is
+                    it. Doubles as the widget's own label on the card. */}
                 <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                  {overlay.widgets.map((type) => {
-                    const t = widgetType(type);
-                    if (!t) return null;
+                  {(() => {
+                    const t = widgetType(overlay.widget);
+                    if (!t) {
+                      return (
+                        <span className="rounded-md bg-white/[0.02] px-1.5 py-0.5 text-[11px] text-neutral-700">
+                          {overlay.widget} (unknown)
+                        </span>
+                      );
+                    }
                     return (
                       <span
-                        key={type}
                         title={t.label}
                         className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-neutral-400"
                       >
@@ -223,7 +227,7 @@ export default function Dashboard() {
                         {t.label}
                       </span>
                     );
-                  })}
+                  })()}
                 </div>
 
                 <div className="mt-5 flex items-center gap-1.5">
@@ -266,20 +270,23 @@ export default function Dashboard() {
             className="w-full max-w-md rounded-2xl border border-white/10 bg-neutral-950 p-5"
           >
             <h2 className="text-sm font-semibold">New overlay</h2>
+            {/* One widget, because one overlay is one widget: a scene you could
+                arrange inside itself no longer exists, and OBS gives each
+                browser source its own position anyway. So this is a widget
+                picker, and every setting stays adjustable afterwards. */}
             <p className="mt-1 text-xs text-neutral-500">
-              A starting point. Every widget stays adjustable afterwards.
+              Pick the widget this overlay shows. Each one becomes its own URL and its own browser
+              source in OBS.
             </p>
 
-            <div className="mt-4 grid gap-1.5">
-              {TEMPLATES.map((t) => (
+            <div className="mt-4 max-h-72 grid gap-1.5 overflow-y-auto pr-1">
+              {WIDGET_LIST.map((t) => (
                 <button
                   key={t.id}
-                  onClick={() => setTemplate(t.id)}
-                  aria-pressed={template === t.id}
+                  onClick={() => setType(t.id)}
+                  aria-pressed={type === t.id}
                   className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition ${
-                    template === t.id
-                      ? "border-white/50 bg-white/5"
-                      : "border-white/10 hover:border-white/25"
+                    type === t.id ? "border-white/50 bg-white/5" : "border-white/10 hover:border-white/25"
                   }`}
                 >
                   <span className="mt-0.5 text-sm">{t.icon}</span>
@@ -298,7 +305,7 @@ export default function Dashboard() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") void create();
               }}
-              placeholder="Overlay name"
+              placeholder={`${widgetType(type)?.label ?? "Overlay"} name`}
               className="mt-4 w-full rounded-lg border border-white/15 bg-black px-4 py-2.5 text-sm outline-none transition placeholder:text-neutral-600 focus:border-white/40"
             />
 

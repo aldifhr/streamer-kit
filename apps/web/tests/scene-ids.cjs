@@ -86,6 +86,58 @@ check("it is enabled", w.enabled !== false);
 check("it is positioned inside the frame", w.x >= 0 && w.x <= 1 && w.y >= 0 && w.y <= 1);
 check("it is not a fill by accident", w.scale > 0);
 
+// ---------------------------------------------------------------------------
+// The single-widget record.
+//
+// Overlays stopped being scenes: each record now holds one widget's type and
+// style, and OBS positions the browser source itself. Everything below is the
+// contract that has to hold for a record saved before this change, and for one
+// written after it.
+// ---------------------------------------------------------------------------
+
+const { widgetFromScene, sceneFromWidget, defaultWidgetConfig, isWidgetConfig } = require(
+  path.join(OUT, "lib", "scene.js"),
+);
+
+console.log("a single-widget record loads as a one-widget scene");
+const single = normaliseScene({
+  version: SCENE_VERSION,
+  type: "astro",
+  style: { "max-astro": 7 },
+  padding: 20,
+  customCSS: ".x{}",
+  global: { fontSize: 22 },
+});
+check("it is recognised as the single-widget shape", isWidgetConfig(single.widgets[0] ? { type: "astro" } : null));
+check("exactly one widget comes out", single.widgets.length === 1);
+check("it is the right widget", single.widgets[0].type === "astro");
+check("its style survives", single.widgets[0].style["max-astro"] === 7);
+check("padding survives", single.padding === 20);
+check("custom CSS survives", single.customCSS === ".x{}");
+check("global style survives", single.global.fontSize === 22);
+
+console.log("an unknown type in a single-widget record still renders something");
+const bogus = normaliseScene({ version: SCENE_VERSION, type: "not-a-widget", style: {} });
+check("it falls back to chat rather than a blank screen", bogus.widgets[0].type === "chat");
+
+console.log("a scene written by the editor stores as one widget");
+const stored = widgetFromScene({
+  ...single,
+  widgets: [makeWidget("astro"), makeWidget("goal")],
+});
+check("it names the first widget", stored.type === "astro");
+check("it has no widget list", !Array.isArray(stored.widgets));
+check("it round-trips back to the same widget", sceneFromWidget(stored).widgets[0].type === "astro");
+
+console.log("a new overlay is its widget at defaults");
+const freshOverlay = defaultWidgetConfig("viewers");
+check("it names the widget", freshOverlay.type === "viewers");
+// Only overrides are stored, never the whole default bag: the defaults live in
+// the widget's registry entry, and copying them into every record is how a
+// default change used to leave existing overlays behind.
+check("it stores no style overrides for an untouched widget", Object.keys(freshOverlay.style).length === 0);
+check("loading it gives back that widget", normaliseScene(freshOverlay).widgets[0].type === "viewers");
+
 console.log();
 if (process.exitCode) {
   console.log("FAILED");

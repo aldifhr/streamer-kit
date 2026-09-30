@@ -20,10 +20,6 @@
  */
 
 import type { Entry } from "@/lib/widgets/types";
-import { mountAstro3D, type AstroPose } from "./three-layer";
-
-/** The outline the 2D path inflates every part by; the 3D texture pads it back. */
-const PAD = 1;
 
 export interface AstroConfig {
   maxAstro: number;
@@ -51,7 +47,10 @@ export interface AstroConfig {
 }
 
 export const DEFAULT_ASTRO_CONFIG: AstroConfig = {
-  maxAstro: 45,
+  // Ten, and the widget clamps to it as well: see MAX_ALIENS in widget.tsx. A 45
+  // alien scene repainted 45 sprites, 45 name plates and a full starfield every
+  // frame, and dropped frames on the machine also running the game and the encoder.
+  maxAstro: 10,
   sleepAfterMs: 3 * 60e3,
   despawnAfterMs: 10 * 60e3,
   promoteGift: 10,
@@ -72,15 +71,17 @@ export const DEFAULT_ASTRO_CONFIG: AstroConfig = {
   censors: true,
 };
 
-const RANKS = ["KADET", "ASTRONOT", "KOMANDAN"];
+/**
+ * Rank titles, from the standalone Alien Pixel overlay this scene was ported
+ * from. Shown in the event feed when someone is promoted.
+ */
+const RANKS = ["LARVA", "ALIEN", "RAJA ALIEN"];
 
 export interface AstroEngine {
   handle: (entry: Entry) => void;
   resize: (w: number, h: number) => void;
   /** Applied without a remount, so a slider drag does not restart the world. */
   configure: (next: AstroConfig) => void;
-  /** False when no WebGL layer mounted and the 2D path is doing the drawing. */
-  using3D: () => boolean;
   reset: () => void;
   destroy: () => void;
 }
@@ -134,6 +135,26 @@ interface Astro {
   ph: number;
   lastActive: number;
   sleeping: boolean;
+  /**
+   * 0..1, so an arrival fades up instead of popping onto the canvas.
+   *
+   * The scene has no camera and no post-processing, so a fade is the only way to
+   * make appearing and disappearing read as motion rather than as a glitch —
+   * which is what it looked like when both were instant.
+   */
+  fade: number;
+  /** Set once the astronaut is on its way out; `leave` then counts 0..1. */
+  leaving: boolean;
+  leave: number;
+  leaveAt: number;
+  /**
+   * Eased 0..1 toward asleep.
+   *
+   * The sprite has two eye frames and alpha used to jump between them, so a
+   * viewer going quiet blinked out. This carries the change over ~300ms; the
+   * eyes still swap at the midpoint, which no one can catch.
+   */
+  sleepMix: number;
   bubble: string;
   bubbleUntil: number;
   pulseAt: number;
@@ -147,8 +168,6 @@ const OUT = "#14122e";
 
 export function createAstroEngine(opts: {
   canvas: HTMLCanvasElement;
-  /** Optional WebGL surface drawn over the 2D one. Omit for the 2D-only path. */
-  layerCanvas?: HTMLCanvasElement;
   storageKey: string;
   config: AstroConfig;
 }): AstroEngine {
@@ -165,6 +184,8 @@ export function createAstroEngine(opts: {
   let LH = 180;
   let bg: HTMLCanvasElement | null = null;
   let nebula: HTMLCanvasElement | null = null;
+  /** bg with the nebula already laid over it, built once. See litBackground. */
+  let bgLit: HTMLCanvasElement | null = null;
 
   const astros = new Map<string, Astro>();
   const crates: { x: number; y: number; vx: number; vy: number; born: number }[] = [];
@@ -172,9 +193,6 @@ export function createAstroEngine(opts: {
   const sparks: { x: number; y: number; vx: number; vy: number; life: number; decay: number; c: string; s: number }[] = [];
   const streaks: { x: number; y: number; vx: number; vy: number; delay: number; len: number }[] = [];
   const feed: { text: string; t: number }[] = [];
-  // Republished every frame when the 3D layer is up. Cleared first, so a
-  // despawned astronaut cannot leave a sprite behind holding its texture.
-  const poses: AstroPose[] = [];
   let rocket: { x: number; y: number; t: number; dur: number } | null = null;
   let partyUntil = 0;
   let totalDiamonds = 0;
@@ -288,12 +306,25 @@ export function createAstroEngine(opts: {
     ctx!.fillRect(R(x), R(y), w, h);
   }
 
+  /**
+ * The glyph for a character, case-folded.
+ *
+ * The 3x5 font is capitals only, and `drawText` used to drop anything it did not
+ * recognise while still advancing four pixels for it. Every lowercase letter in
+ * the scene was therefore a blank gap: "Lv6" came out as "L 6", and a feed line
+ * reading "naik jadi ALIEN" lost all three words before the rank. Folding here
+ * means callers can write ordinary mixed-case text and get it drawn.
+ */
+  function glyph(ch: string): string | undefined {
+    return FONT[ch] ?? FONT[ch.toUpperCase()];
+  }
+
   function drawText(s: string, x: number, y: number, c: string) {
     x = R(x);
     y = R(y);
     ctx!.fillStyle = c;
     for (let i = 0; i < s.length; i++) {
-      const g = FONT[s[i]];
+      const g = glyph(s[i]);
       if (!g) continue;
       for (let k = 0; k < 15; k++) {
         if (g[k] === "1") ctx!.fillRect(x + i * 4 + (k % 3), y + Math.floor(k / 3), 1, 1);
@@ -309,10 +340,55 @@ export function createAstroEngine(opts: {
     ctx!.fillRect(x, y + 1, w, h - 2);
   }
 
-  function label(s: string, cx: number, y: number, textCol: string, plateCol: string) {
+  /**
+   * Rendered label strips, keyed by text and colour.
+   *
+   * A name plate is up to fifteen characters of a 3x5 pixel font, which is 225
+   * one-pixel fillRects — each preceded by a fillStyle change. Forty-five
+   * labelled astronauts meant ten thousand of those a frame, and it was the
+   * single largest cost in the 2D path. The strip only changes when a name or a
+   * level does, so it is drawn once and blitted after that.
+   *
+   * Cleared wholesale rather than evicted one at a time: a busy room can outrun
+   * any sensible cap, and rebuilding a strip is a handful of fillRects.
+   */
+  const labelCache = new Map<string, HTMLCanvasElement>();
+  const LABEL_CACHE_MAX = 240;
+
+  function labelStrip(s: string, textCol: string, plateCol: string): HTMLCanvasElement {
+    const key = `${textCol}|${plateCol}|${s}`;
+    const hit = labelCache.get(key);
+    if (hit) return hit;
+
     const w = textW(s);
-    plate(cx - w / 2 - 2, y - 2, w + 4, 9, plateCol);
-    drawText(s, cx - w / 2, y, textCol);
+    const cw = w + 4;
+    const off = document.createElement("canvas");
+    off.width = cw;
+    off.height = 9;
+    const c = off.getContext("2d")!;
+
+    // The same plate() shape, drawn at 0,0 rather than positioned.
+    c.fillStyle = plateCol;
+    c.fillRect(1, 0, cw - 2, 9);
+    c.fillRect(0, 1, cw, 7);
+
+    c.fillStyle = textCol;
+    for (let i = 0; i < s.length; i++) {
+      const g = glyph(s[i]);
+      if (!g) continue;
+      for (let k = 0; k < 15; k++) {
+        if (g[k] === "1") c.fillRect(2 + i * 4 + (k % 3), Math.floor(k / 3), 1, 1);
+      }
+    }
+
+    if (labelCache.size >= LABEL_CACHE_MAX) labelCache.clear();
+    labelCache.set(key, off);
+    return off;
+  }
+
+  function label(s: string, cx: number, y: number, textCol: string, plateCol: string) {
+    const strip = labelStrip(s, textCol, plateCol);
+    ctx!.drawImage(strip, R(cx - strip.width / 2), R(y - 2));
   }
 
   /* -------------------------------------------------------------- sprites */
@@ -336,67 +412,124 @@ export function createAstroEngine(opts: {
     }
   }
 
+  /**
+   * The character: a wide-headed alien with two antennae, on a 17px grid.
+   *
+   * Ported from `alienParts` in the standalone Alien Pixel overlay this scene
+   * came from. It replaced a spacesuited figure with a helmet and a visor, which
+   * was the one thing still calling the scene astronauts after everything else
+   * had been renamed.
+   *
+   * The grid runs from y = -4 (antennae) to y = 17 (feet), so it is taller than
+   * the 17x17 box `xf` rotates inside. During the brief flip that puts the
+   * antennae a pixel or two outside the box, which is invisible against the
+   * starfield; the alternative was shrinking the design to fit the old box.
+   */
   function astroParts(a: Astro, wf: number, leg: number, waving: boolean) {
     const P: Part[] = [];
     const add = (x: number, y: number, w: number, h: number, c: string, n?: boolean) => P.push([x, y, w, h, c, n]);
-    const acc = `hsl(${a.hue},78%,58%)`;
-    const HELM = "#f4f4ff";
-    const SUIT = "#dfe2f5";
-    const GLOVE = "#b8bdd8";
-    const gold = a.rank >= 2;
-    const v1 = gold ? "#e6b03a" : "#3a56b8";
-    const v2 = gold ? "#9a6412" : "#1d2a6a";
+    const skin = `hsl(${a.hue},62%,52%)`;
+    const dark = `hsl(${a.hue},55%,34%)`;
+    const light = `hsl(${a.hue},75%,72%)`;
+    const INK = "#050510";
 
-    add(1, 9, 2, 3, SUIT);
-    add(1, 12, 2, 1, GLOVE);
+    // Body: torso, arms and legs.
+    add(2, 10, 2, 3, skin);
     if (waving) {
-      add(10, 8, 3, 1, SUIT);
-      add(11 + wf, 3, 2, 6, SUIT);
-      add(11 + wf, 2, 2, 1, GLOVE);
+      add(10, 9, 3, 1, skin);
+      add(12, 4, 1, 6, skin);
+      add(11 + wf, 3, 2, 1, light);
     } else {
-      add(10, 9, 2, 3, SUIT);
-      add(10, 12, 2, 1, GLOVE);
+      add(9, 10, 2, 3, skin);
     }
 
     const lx = 4 - leg;
     const rx = 7 + leg;
-    add(lx, 13, 2, 3, SUIT);
-    add(rx, 13, 2, 3, SUIT);
-    add(lx, 16, 2, 1, acc);
-    add(rx, 16, 2, 1, acc);
+    add(lx, 14, 2, 2, skin);
+    add(rx, 14, 2, 2, skin);
+    add(lx - 1, 16, 3, 1, dark);
+    add(rx, 16, 3, 1, dark);
 
-    add(3, 8, 7, 5, HELM);
-    add(3, 12, 7, 1, a.rank >= 1 ? acc : GLOVE, true);
-    add(5, 9, 3, 2, acc, true);
-    if (gold) add(3, 8, 2, 1, "#ffcd3c", true);
-    if (a.badge) add(8, 9, 2, 2, "#ffcd3c", true);
+    add(4, 10, 5, 4, dark);
+    add(5, 11, 3, 1, light, true);
+    if (a.badge) add(7, 12, 2, 2, "#ffcd3c", true);
 
-    add(4, 0, 5, 1, a.rank >= 1 ? acc : HELM);
-    add(3, 1, 7, 1, HELM);
-    add(2, 2, 9, 4, HELM);
-    add(3, 6, 7, 1, HELM);
-    add(4, 7, 5, 1, HELM);
-    if (gold) {
-      add(6, -2, 1, 2, "#ffcd3c");
-      add(6, -3, 1, 1, "#fff6c8");
+    // Head: a dome over a jaw.
+    add(4, 1, 5, 1, skin);
+    add(3, 2, 7, 1, skin);
+    add(2, 3, 9, 1, skin);
+    add(1, 4, 11, 2, skin);
+    add(2, 6, 9, 1, skin);
+    add(3, 7, 7, 1, skin);
+    add(4, 8, 5, 1, skin);
+    add(5, 9, 3, 1, skin);
+    add(3, 3, 2, 1, light, true);
+
+    // Eyes. Asleep they are two closed lines; awake, slanted and highlighted.
+    if (a.sleeping) {
+      add(2, 5, 3, 1, INK, true);
+      add(8, 5, 3, 1, INK, true);
+    } else {
+      add(2, 4, 2, 1, INK, true);
+      add(3, 5, 3, 1, INK, true);
+      add(4, 6, 2, 1, INK, true);
+      add(9, 4, 2, 1, INK, true);
+      add(7, 5, 3, 1, INK, true);
+      add(7, 6, 2, 1, INK, true);
+      add(3, 5, 1, 1, "#ffffff", true);
+      add(9, 5, 1, 1, "#ffffff", true);
     }
 
-    add(4, 2, 5, 1, v1, true);
-    add(3, 3, 7, 1, v1, true);
-    add(3, 4, 7, 1, v2, true);
-    add(4, 5, 5, 1, v2, true);
-    add(4, 3, 1, 1, gold ? "#fff0b0" : "#8fb8ff", true);
-    if (a.sleeping) {
-      add(4, 4, 2, 1, "#e9f7ff", true);
-      add(7, 4, 2, 1, "#e9f7ff", true);
-    } else {
-      add(5, 4, 1, 1, "#e9f7ff", true);
-      add(7, 4, 1, 1, "#e9f7ff", true);
+    // Mouth and rank pip.
+    add(5, 8, 3, 1, dark, true);
+    if (a.rank >= 1) add(6, 2, 1, 1, "#ffe066", true);
+
+    // Antennae. Rank 2 and up lights the tips.
+    const w = a.rank >= 1 ? 3 : 2;
+    add(4, -2, 1, 3, dark);
+    add(8, -2, 1, 3, dark);
+    add(a.rank >= 1 ? 2 : 3, -4, w, 2, "#ff7ad9", true);
+    add(8, -4, w, 2, "#ff7ad9", true);
+
+    if (a.rank >= 2) {
+      add(5, 0, 3, 1, "#ffcd3c");
+      add(5, -1, 1, 1, "#ffcd3c");
+      add(7, -1, 1, 1, "#ffcd3c");
     }
     return P;
   }
 
   /* ------------------------------------------------------------- lifecycle */
+
+  /** How long an arrival takes to fade up, and a departure to fade out. */
+  const FADE_IN = 420;
+  const FADE_OUT = 520;
+
+  const easeOut = (t: number) => 1 - (1 - t) * (1 - t);
+  const easeIn = (t: number) => t * t;
+
+  /**
+   * Start an astronaut on its way off screen.
+   *
+   * Deliberately does not delete. The roster entry stays put until the fade has
+   * run, and `touch` cancels a departure if the viewer speaks again — someone who
+   * reappears mid-fade used to blink out of existence because the fade had no way
+   * to be called off.
+   */
+  function startLeaving(a: Astro, now: number) {
+    if (a.leaving) return;
+    a.leaving = true;
+    a.leave = 0;
+    a.leaveAt = now;
+  }
+
+  /** What an astronaut is drawn at, after every transition in the scene. */
+  function alphaFor(a: Astro): number {
+    const inF = easeOut(clamp(a.fade, 0, 1));
+    const outF = a.leaving ? 1 - easeIn(clamp(a.leave, 0, 1)) : 1;
+    const asleep = 1 - a.sleepMix * 0.35;
+    return clamp(inF * outF * asleep, 0, 1);
+  }
 
   function rankFor(xp: number) {
     let s = 0;
@@ -406,7 +539,17 @@ export function createAstroEngine(opts: {
     return s;
   }
 
-  const levelFor = (xp: number) => 1 + Math.floor(Math.sqrt(Math.max(0, xp)));
+  /**
+ * The level shown next to a name.
+ *
+ * Capped at 10. The underlying curve is `sqrt(xp)`, which is unbounded, so a
+ * long-running stream eventually produced labels like "Lv47" — four characters
+ * where the plate was sized for three, and a number nobody reads. The cap is on
+ * the display only: XP keeps accumulating and the ranks still work, so a veteran
+ * viewer is still a veteran viewer.
+ */
+const MAX_LEVEL = 10;
+const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Math.max(0, xp))));
 
   /**
    * Retire astronauts when the viewer count falls.
@@ -444,10 +587,11 @@ export function createAstroEngine(opts: {
     for (let i = 0; i < gone; i++) {
       let quietest: Astro | null = null;
       for (const a of astros.values()) {
+        if (a.leaving) continue;
         if (!quietest || a.lastActive < quietest.lastActive) quietest = a;
       }
       if (!quietest) break;
-      astros.delete(quietest.id);
+      startLeaving(quietest, performance.now());
       // `store` is deliberately left alone. A viewer who closes the tab and comes
       // back is the same viewer, and resetting them is the one thing a roster
       // should never do.
@@ -505,8 +649,24 @@ export function createAstroEngine(opts: {
     }
     if (astros.size >= cfg.maxAstro) {
       let oldest: Astro | null = null;
-      for (const o of astros.values()) if (!oldest || o.lastActive < oldest.lastActive) oldest = o;
-      if (oldest) astros.delete(oldest.id);
+      for (const o of astros.values()) {
+        if (o.leaving) continue;
+        if (!oldest || o.lastActive < oldest.lastActive) oldest = o;
+      }
+      if (oldest) {
+        // Fade the quietest one out rather than deleting it. The roster is over
+        // its cap for half a second, which is invisible; a viewer blinking out
+        // from under a newcomer was not.
+        startLeaving(oldest, performance.now());
+      } else {
+        // Everything on screen is already leaving, so the cap cannot be met by
+        // waiting. Only then is a hard delete the lesser evil.
+        for (const o of astros.values()) {
+          if (!o.leaving) continue;
+          astros.delete(o.id);
+          break;
+        }
+      }
     }
     const rec = store[id] || ({} as Stored);
     const xp = rec.xp || 0;
@@ -527,6 +687,11 @@ export function createAstroEngine(opts: {
       ph: rand(0, 6),
       lastActive: performance.now(),
       sleeping: false,
+      fade: 0,
+      leaving: false,
+      leave: 0,
+      leaveAt: 0,
+      sleepMix: 0,
       bubble: "",
       bubbleUntil: 0,
       pulseAt: 0,
@@ -554,6 +719,9 @@ export function createAstroEngine(opts: {
   const touch = (a: Astro) => {
     a.lastActive = performance.now();
     a.sleeping = false;
+    // A viewer who comes back while on their way out stays.
+    a.leaving = false;
+    a.leave = 0;
   };
 
   function gainXP(a: Astro, n: number) {
@@ -592,8 +760,19 @@ export function createAstroEngine(opts: {
   function updateAstro(a: Astro, dt: number, now: number) {
     a.sleeping = now - a.lastActive > cfg.sleepAfterMs;
     a.t += dt;
+    // The transitions, all of them eased off dt so they run at the same speed on
+    // a 30fps laptop and a 144Hz desktop instead of snapping on whichever one
+    // happened to be slower.
+    a.fade = Math.min(1, a.fade + (dt * 1000) / FADE_IN);
+    if (a.leaving) a.leave = Math.min(1, a.leave + (dt * 1000) / FADE_OUT);
+    a.sleepMix += ((a.sleeping ? 1 : 0) - a.sleepMix) * Math.min(1, dt * 4.5);
+
     let thrust = false;
-    a.theta += (Math.random() - 0.5) * 1.6 * dt;
+    // Wander by sine rather than by a random kick. The kick was applied every
+    // frame, so at 60fps the heading changed ~48 times a second and the drift
+    // read as a vibration rather than a float; two sines at different rates and
+    // phases per astronaut give the same wandering look with none of the jitter.
+    a.theta += (Math.sin(a.t * 0.7 + a.ph) + Math.sin(a.t * 0.23 + a.ph * 2.1)) * 0.9 * dt;
     let ax = Math.cos(a.theta) * 3.5;
     let ay = Math.sin(a.theta) * 3.5;
 
@@ -625,8 +804,8 @@ export function createAstroEngine(opts: {
       const d = Math.hypot(ast.x - a.x, ast.y - a.y);
       if (d < ast.r + 26) {
         const ang = Math.atan2(a.y - ast.y, ast.x - ast.x);
-        ax = Math.cos(ang) * 70;
-        ay = Math.sin(ang) * 70;
+        ax = Math.cos(ang) * 46;
+        ay = Math.sin(ang) * 46;
         thrust = true;
       }
     }
@@ -639,6 +818,12 @@ export function createAstroEngine(opts: {
 
     a.vx += ax * dt;
     a.vy += ay * dt;
+    // Drag. Without it a change of heading — an asteroid dodge, the pull toward a
+    // crate — is applied as an impulse and the astronaut snaps to the new
+    // direction in one frame. Drag turns that into a turn over a few tenths.
+    const drag = Math.min(1, dt * 2.2);
+    a.vx -= a.vx * drag;
+    a.vy -= a.vy * drag;
     const maxV = thrust ? 36 : a.sleeping ? 1.5 : 7;
     const sp = Math.hypot(a.vx, a.vy);
     if (sp > maxV) {
@@ -662,52 +847,30 @@ export function createAstroEngine(opts: {
 
   /* ------------------------------------------------------------- drawing */
 
-  /**
-   * Optional WebGL layer for the astronauts.
+  /*
+   * The astronauts are drawn here, on the 2D canvas, and there is no WebGL layer
+   * any more.
    *
-   * Everything else in the scene stays 2D — see lib/widgets/astro/three-layer.ts
-   * for why. When the layer mounts, `drawAstro` stops filling rectangles and
-   * publishes a pose instead; when it does not, nothing here changes. So a
-   * missing WebGL context, hardware acceleration disabled in OBS, or a browser
-   * that refuses to give us one all fall through to the path that has been on
-   * stream all along rather than showing the streamer an empty frame.
+   * There was one: an optional second canvas with three.js sprites for the
+   * astronauts, with the rest of the scene left flat. It is parked in
+   * three-layer.ts rather than deleted. Two reasons it came out:
+   *
+   *   - It drew nothing. The layer reported itself mounted, `drawAstro` stopped
+   *     filling rectangles and published a pose instead, and no sprite appeared —
+   *     so a live scene showed name plates and levels floating over an empty
+   *     space. The fallback that was supposed to catch exactly this only covers
+   *     a layer that declines to mount, not one that mounts and renders nothing.
+   *   - It cost more than it bought. A second full-frame context, and a texture
+   *     rebake per walk cycle per astronaut: 45 astronauts is ~100 canvas
+   *     creations and GPU uploads a second, which is what made the scene crawl.
+   *
+   * `three` also failed to resolve from the dev bundler more than once, and
+   * because the import was traced from this file, that broke the whole overlay
+   * page's client bundle rather than just the layer.
+   *
+   * Everything the 2D path draws is what the standalone overlay this engine was
+   * ported from has always drawn.
    */
-  // Mounted here rather than in createAstroEngine, and deliberately not awaited
-  // inside it: the constructor is sync, and making it async would force every
-  // caller to handle a promise for something that is allowed to be late.
-  //
-  // Three.js is ~540KB and this scene runs in an OBS browser source. Eagerly
-  // imported it would sit in the initial chunk of every page that mounts the
-  // widget, so the overlay would wait on it before its first frame — the exact
-  // stutter a stream cannot absorb. A dynamic import keeps it off the critical
-  // path: the 2D scene starts drawing immediately and the sprites join a beat
-  // later. One frame of flat astronauts is invisible; a blocked first paint is
-  // not.
-  let layer3d: import("./three-layer").AstroLayer3D | null = null;
-  let disposed = false;
-
-  if (opts.layerCanvas) {
-    const layer = opts.layerCanvas;
-    void import("./three-layer")
-      .then((mod) => {
-        // destroy() may have run while Three.js was still in flight — an editor
-        // remount does exactly that — and mounting onto a disposed layer would
-        // leak a WebGL context and its textures.
-        if (disposed) return;
-        layer3d = mod.mountAstro3D(layer, { pixelScale: cfg.pixelSize || 8 });
-        if (!layer3d) return;
-        // The scene was measured before the layer existed, so it has to be
-        // caught up or the sprites would be drawn at a 300x150 default.
-        layer3d.resize(LW, LH, 1);
-        if (W > 0 && H > 0) ensureRunning();
-      })
-      .catch((err) => {
-        // A throw here is a graphics driver problem, never a reason to stop
-        // rendering. The 2D path is already drawing by now.
-        console.warn("[astro] 3D layer unavailable, using 2D", err);
-        layer3d = null;
-      });
-  }
 
   function drawAstro(a: Astro, now: number) {
     const wav = now < a.waveUntil;
@@ -722,27 +885,19 @@ export function createAstroEngine(opts: {
     const ox = R(a.x) - 6;
     const oy = R(a.y) - 8 + R(Math.sin(a.t * 1.5 + a.ph)) + R(hop);
 
-    if (layer3d) {
-      // Published rather than drawn. The same astroParts() call, so the 3D and 2D
-      // renderings cannot drift: same walk cycle, same facing frames, same hue.
-      poses.push({
-        id: a.id,
-        parts: astroParts(a, wf, leg, wav).map((p) => xf(p, k) as Part),
-        x: ox - PAD,
-        y: oy - PAD,
-        facing: k,
-        alpha: a.sleeping ? 0.65 : 1,
-        scale: 1 + Math.min(0.35, a.xp / 4000),
-      });
-      return;
-    }
-
-    if (a.sleeping) ctx!.globalAlpha = 0.65;
+    const alpha = alphaFor(a);
+    if (alpha <= 0.02) return;
+    if (alpha < 1) ctx!.globalAlpha = alpha;
     drawParts(astroParts(a, wf, leg, wav), ox, oy, k);
     ctx!.globalAlpha = 1;
   }
 
   function drawDrones(a: Astro, now: number) {
+    // With their owner: a drone left at full opacity over a dissolving alien
+    // reads as a bug rather than as the same thing fading.
+    const alpha = alphaFor(a);
+    if (alpha <= 0.02) return;
+    if (alpha < 1) ctx!.globalAlpha = alpha;
     a.drones.forEach((d) => {
       const on = Math.floor(now / 350) % 2;
       drawParts(
@@ -756,9 +911,15 @@ export function createAstroEngine(opts: {
         0,
       );
     });
+    ctx!.globalAlpha = 1;
   }
 
   function drawLabels(a: Astro, showLabel: boolean, isTop: boolean, now: number) {
+    // Fades with the astronaut, so a name plate does not hang in the air for the
+    // half second its owner is still dissolving.
+    const alpha = alphaFor(a);
+    if (alpha <= 0.02) return;
+    if (alpha < 1) ctx!.globalAlpha = alpha;
     if (showLabel) {
       const nm = sanitize(a.name).slice(0, 10) || "VIEWER";
       label(
@@ -769,7 +930,13 @@ export function createAstroEngine(opts: {
         "rgba(10,8,34,.85)",
       );
     }
-    if (a.sleeping) drawText("ZZ", a.x + 8, a.y - 12, "#cfd0ff");
+    // The Zs come in with sleepMix rather than appearing the instant the eyes
+    // close, and drift up as it fills — the one place in the scene where motion
+    // reads as "getting sleepy" instead of "changed state".
+    if (a.sleepMix > 0.15) {
+      const rise = R((1 - a.sleepMix) * 4);
+      drawText("ZZ", R(a.x) + 8, R(a.y) - 12 + rise, "#cfd0ff");
+    }
     if (a.bubble && now < a.bubbleUntil) {
       const s = sanitize(a.bubble).slice(0, 22);
       if (s) {
@@ -782,6 +949,7 @@ export function createAstroEngine(opts: {
         drawText(s, cx - w / 2, y, "#15123a");
       }
     }
+    ctx!.globalAlpha = 1;
   }
 
   /* ------------------------------------------------------------ backdrop */
@@ -792,6 +960,7 @@ export function createAstroEngine(opts: {
   };
 
   function buildBackground() {
+    bgLit = null;
     bg = document.createElement("canvas");
     bg.width = LW;
     bg.height = LH;
@@ -883,6 +1052,28 @@ export function createAstroEngine(opts: {
         else if (a2 > 1.15 && (x + y) % 2 === 0) pxl(n, x, y, "#1f5fa8");
       }
     }
+  }
+
+  /**
+   * The backdrop with the nebula already blended into it.
+   *
+   * Both are static once built, so the two full-frame draws — one of them with
+   * `globalAlpha`, which is a per-pixel blend across the whole canvas — collapse
+   * into a single blit. Built on first use, because the nebula only appears once
+   * the stream has earned it, and dropped by `buildBackground` on every resize.
+   */
+  function litBackground() {
+    if (bgLit) return bgLit;
+    if (!bg || !nebula) return null;
+    const c = document.createElement("canvas");
+    c.width = LW;
+    c.height = LH;
+    const g = c.getContext("2d")!;
+    g.drawImage(bg, 0, 0);
+    g.globalAlpha = 0.45;
+    g.drawImage(nebula, 0, 0);
+    bgLit = c;
+    return bgLit;
   }
 
   function drawStars(t: number) {
@@ -1154,7 +1345,7 @@ export function createAstroEngine(opts: {
 
   function drawHUD(now: number) {
     if (cfg.showHud) {
-      const head = `ASTRONOT ${astros.size}` + (totalDiamonds ? `  DIAMOND ${totalDiamonds}` : "");
+      const head = `ALIEN ${astros.size}` + (totalDiamonds ? `  DIAMOND ${totalDiamonds}` : "");
       plate(3, 3, textW(head) + 6, 11, "rgba(10,8,34,.85)");
       drawText(head, 6, 6, "#ffffff");
     }
@@ -1272,31 +1463,59 @@ export function createAstroEngine(opts: {
 
   /* ---------------------------------------------------------------- loop */
 
+  /**
+   * The scene is drawn at 60fps, whatever the display runs at.
+   *
+   * requestAnimationFrame fires at the panel's refresh rate, so on a 144Hz or
+   * 240Hz monitor this repainted the starfield, the roster, the labels and the
+   * feed two to four times as often as they can be seen — for a stream that
+   * also has a game and an encoder running. Nothing in the scene is smoother at
+   * 144 than at 60; it is only more expensive.
+   *
+   * The leftover time carries into the next frame rather than being dropped, so
+   * a 144Hz panel averages 60fps instead of landing on 48 — which is what happens
+   * if each frame is simply tested against the budget on its own, because
+   * 16.67ms is not a whole number of 6.94ms vsyncs.
+   */
+  const FRAME_BUDGET = 1000 / 60;
+  let carry = 0;
   let last = performance.now();
   let frame = 0;
   let running = false;
 
   const tick = () => {
+    frame = requestAnimationFrame(tick);
     const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const elapsed = now - last;
     last = now;
+
+    carry += elapsed;
+    // A millisecond of slack, so a panel sitting a hair under the budget still
+    // counts as a frame instead of being skipped forever.
+    if (carry < FRAME_BUDGET - 1) return;
+    carry -= FRAME_BUDGET;
+    // A long stall — a hidden tab, a garbage collection — must not come back as a
+    // burst of catch-up frames.
+    if (carry < 0 || carry > FRAME_BUDGET) carry = 0;
+
+    const dt = Math.min(0.05, elapsed / 1000);
     const t = now / 1000;
 
     updateWorld(dt, now);
     for (const [id, a] of astros) {
       updateAstro(a, dt, now);
-      if (now - a.lastActive > cfg.despawnAfterMs) astros.delete(id);
+      // Timed despawn used to delete outright, which is why the roster thinned
+      // in visible jumps. It fades out now, and the entry is only dropped once
+      // the fade has finished — a viewer who speaks mid-fade cancels it in
+      // `touch`, so nothing can vanish while they are still on screen.
+      if (!a.leaving && now - a.lastActive > cfg.despawnAfterMs) startLeaving(a, now);
+      if (a.leaving && a.leave >= 1) astros.delete(id);
     }
 
     ctx!.clearRect(0, 0, LW, LH);
-    if (cfg.space) {
-      if (bg) ctx!.drawImage(bg, 0, 0);
+    if (cfg.space && bg) {
+      ctx!.drawImage((totalDiamonds >= cfg.decorNebula ? litBackground() : null) ?? bg, 0, 0);
       drawStars(t);
-      if (totalDiamonds >= cfg.decorNebula && nebula) {
-        ctx!.globalAlpha = 0.45;
-        ctx!.drawImage(nebula, 0, 0);
-        ctx!.globalAlpha = 1;
-      }
     }
     if (totalDiamonds >= cfg.decorStation) drawStation(t);
 
@@ -1326,18 +1545,6 @@ export function createAstroEngine(opts: {
       });
     }
     drawHUD(now);
-
-    if (layer3d) {
-      // Cleared and rebuilt every frame rather than diffed: drawAstro pushes
-      // while the scene draws, so by this point the list is exactly the roster
-      // as rendered this frame. Anything that left the roster simply is not
-      // pushed, and the layer drops the sprite it was holding for it.
-      layer3d.sync(poses);
-      layer3d.render();
-      poses.length = 0;
-    }
-
-    frame = requestAnimationFrame(tick);
   };
 
   /**
@@ -1350,6 +1557,8 @@ export function createAstroEngine(opts: {
     if (running) return;
     running = true;
     last = performance.now();
+    // A resize after a stall must not come back owing a frame.
+    carry = 0;
     frame = requestAnimationFrame(tick);
   }
 
@@ -1381,22 +1590,6 @@ export function createAstroEngine(opts: {
     canvas.style.height = `${LH * PX}px`;
     ctx!.imageSmoothingEnabled = false;
     buildBackground();
-    // The 3D layer gets the *logical* size and the same PX, because the poses
-    // are in logical pixels: drawAstro positions astronauts in the LW/LH grid.
-    // Handing it the CSS size instead would put every sprite one PX off, which on
-    // a 3x scale is three visible pixels of drift per astronaut.
-    if (layer3d && opts.layerCanvas) {
-      // The 2D canvas is resized here, so this canvas is resized here too, or it
-      // keeps its 300x150 default and stretches over a scene it no longer matches.
-      // `renderer.setSize(..., false)` leaves the CSS size alone, so both rules
-      // below are needed: the backing store for precision, the style so it covers
-      // the same box as the scene.
-      opts.layerCanvas.width = LW;
-      opts.layerCanvas.height = LH;
-      opts.layerCanvas.style.width = `${LW * PX}px`;
-      opts.layerCanvas.style.height = `${LH * PX}px`;
-      layer3d.resize(LW, LH, 1);
-    }
     if (W > 0 && H > 0) ensureRunning();
   }
 
@@ -1430,27 +1623,11 @@ export function createAstroEngine(opts: {
       rocket = null;
       persist();
     },
-    // False while the layer is still loading, so the widget does not tear the
-    // canvas out of the DOM during a beat that lasts a few milliseconds.
-    using3D: () => layer3d !== null,
     destroy() {
-      // Set before anything else, so an in-flight dynamic import bails out instead
-      // of mounting a WebGL context onto a scene that is already gone.
-      disposed = true;
       running = false;
       cancelAnimationFrame(frame);
       clearInterval(saveTimer);
       persist();
-      // The layer owns a WebGL context and one texture per astronaut. Not
-      // disposing it here would keep the context alive across a remount, and
-      // browsers cap how many a page may hold — so an editor that remounts the
-      // scene a few times would start losing contexts and fall back to software
-      // rendering on stream.
-      if (layer3d) {
-        layer3d.destroy();
-        layer3d = null;
-      }
-      poses.length = 0;
     },
   };
 }

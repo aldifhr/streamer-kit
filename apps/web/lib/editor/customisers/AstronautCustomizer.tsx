@@ -179,11 +179,11 @@ export function AstronautCustomizer({ style, overlayId, onChange }: CustomiserPr
       </Group>
 
       <Group title="Roster">
-        <Field label={`Max on screen — ${num(style, "max-astro", 45)}`}>
+        <Field label={`Max on screen — ${Math.min(10, num(style, "max-astro", 10))}`}>
           <Range
-            min={5}
-            max={45}
-            value={num(style, "max-astro", 45)}
+            min={1}
+            max={10}
+            value={Math.min(10, num(style, "max-astro", 10))}
             onChange={(v) => onChange("max-astro", v)}
           />
         </Field>

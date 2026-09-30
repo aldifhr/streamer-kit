@@ -69,25 +69,42 @@ pilihan untuk deployment. Lihat [Auth](#auth).
 
 ## Penggunaan
 
+Satu overlay = satu widget. Tidak ada scene yang bisa disusun di dalamnya, dan
+posisi tiap widget diatur OBS sendiri lewat Browser Source-nya.
+
 1. Buka `http://localhost:3000/dashboard`
-2. **New** → beri nama overlay
-3. **Open** → isi channel TikTok, lalu pilih tema dan atur tampilan
+2. **New** → pilih widget (Aliens, Chat, Viewer count, Top gifter, …) → beri nama
+3. **Open** → isi channel TikTok, lalu atur tampilan widget itu
 4. **Save settings**
 5. Salin **Overlay URL for OBS**, paste ke Browser Source
 
-Overlay荤片 `/overlay/{id}` adalah halaman yang di-load OBS, dan dia **memiliki**
+Overlay di `/overlay/{id}` adalah halaman yang di-load OBS, dan dia **memiliki**
 koneksinya sendiri — jadi URL itu langsung jalan begitu di-paste, tanpa perlu
 menyalakan apa pun di dashboard.
 
 Di editor, koneksi juga otomatis: begitu channel diisi dan field-nya blur, backend
 suruh konek. Tombol **Reconnect** cuma untuk kalau perlu paksa.
 
+### Pindah dari scene ke satu widget per overlay
+
+Record lama masih bentuk scene (`config.widgets`) dan **tetap dibaca** — `ajoy`
+yang masih punya alien + goal bar akan terbuka dengan widget pertama saja, lalu
+editor memberi tahu widget mana yang perlu overlay baru. Save menuliskannya ulang
+dalam bentuk satu widget, jadi tidak perlu migrasi manual.
+
+`lib/templates.ts` (template scene) dan drag-to-place di canvas ikut dihapus:
+keduanya hanya bermakna kalau satu overlay bisa berisi beberapa widget.
+
 ## OBS
 
-1. Tambah **Browser Source**
+Tiap widget jadi Browser Source sendiri:
+
+1. Tambah **Browser Source** per overlay
 2. Paste `https://<frontend>/overlay/{id}`
 3. Set ukuran sesuai canvas (1920×1080, atau 1080×1920 untuk vertikal)
-4. Centang **Shutdown source when not visible**
+4. **Centang** *Shutdown source when not visible* — satu source per widget, dan
+   tidak ada gunanya menggambar yang tidak terlihat
+5. Atur posisi widget di properties Browser Source, bukan di editor
 
 Browser Source tidak bisa login, jadi `/overlay/{id}` **tidak** di-gate. Lihat
 [Auth](#auth) untuk konsekuensinya.

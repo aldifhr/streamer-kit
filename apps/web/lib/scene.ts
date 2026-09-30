@@ -291,6 +291,22 @@ export function normaliseScene(raw: unknown): SceneConfig {
   if (!raw || typeof raw !== "object") return defaultScene();
   const source = raw as Record<string, unknown>;
 
+  // A single-widget record: the shape every overlay is stored in now. Turned
+  // into a one-widget scene so nothing downstream has to know the difference.
+  if (isWidgetConfig(source)) {
+    const type = source.type;
+    if (!WIDGET_TYPES[type]) return defaultScene();
+    const scene = defaultScene();
+    scene.theme = "streamline";
+    scene.widgets = [makeWidget(type, { ...(source.style as StyleMap ?? {}) })];
+    if (typeof source.customCSS === "string") scene.customCSS = source.customCSS;
+    if (typeof source.padding === "number") scene.padding = source.padding;
+    if (source.global && typeof source.global === "object") {
+      scene.global = { ...DEFAULT_GLOBAL, ...(source.global as GlobalStyle) };
+    }
+    return scene;
+  }
+
   if (source.version !== SCENE_VERSION || !Array.isArray(source.widgets)) {
     return migrateV1(source);
   }
@@ -313,6 +329,95 @@ export function normaliseScene(raw: unknown): SceneConfig {
   // screen in OBS, which is much harder to diagnose than a fresh chat.
   scene.widgets = widgets.length > 0 ? widgets : [makeWidget("chat")];
   return scene;
+}
+
+/**
+ * One widget, on its own.
+ *
+ * What an overlay record holds now: a type, that widget's style overrides, and
+ * the scene-wide settings that used to sit beside the widget list. Everything
+ * else in this module still thinks in `SceneConfig`, and a scene of exactly one
+ * widget is what a single-widget config is turned into — so the renderer, the
+ * editor and the tests keep one shape instead of two.
+ */
+export interface WidgetConfig {
+  version: number;
+  /** The widget this overlay *is*. There is no list. */
+  type: string;
+  /** Only the keys the user has changed, over the widget's defaults. */
+  style: StyleMap;
+  global: GlobalStyle;
+  /** Inset from the frame edge, in pixels. */
+  padding: number;
+  customCSS: string;
+}
+
+/**
+ * The scene a single widget makes.
+ *
+ * The id is the overlay's own id, not a generated one, and that is load-bearing:
+ * it is what the counter widgets key their saved state by, so a stable id is what
+ * stops every viewer starting from zero XP when the config is rewritten.
+ */
+export function sceneFromWidget(cfg: WidgetConfig): SceneConfig {
+  return {
+    version: SCENE_VERSION,
+    theme: "streamline",
+    padding: cfg.padding,
+    customCSS: cfg.customCSS,
+    global: cfg.global,
+    widgets: [
+      {
+        id: newWidgetId(cfg.type),
+        type: cfg.type,
+        enabled: true,
+        x: 0,
+        y: 0,
+        scale: 1,
+        style: cfg.style,
+      },
+    ],
+  };
+}
+
+/**
+ * The stored shape of the scene a single widget makes.
+ *
+ * What the editor writes. Position, scale, theme and the widget list are gone:
+ * OBS positions and sizes each browser source, so a scene-level position would
+ * only ever be a second, disagreeing answer.
+ */
+export function widgetFromScene(scene: SceneConfig): WidgetConfig {
+  const widget = scene.widgets[0];
+  return {
+    version: SCENE_VERSION,
+    type: widget?.type ?? "chat",
+    style: widget ? { ...widget.style } : {},
+    global: { ...scene.global },
+    padding: scene.padding,
+    customCSS: scene.customCSS,
+  };
+}
+
+/**
+ * A brand new overlay: this widget, at its defaults.
+ *
+ * Built through `sceneFromWidget`/`widgetFromScene` on purpose. The defaults live
+ * in the widget's own registry entry, and a new record is defined as "that
+ * widget, untouched" — writing the shape out here instead would be a second place
+ * for a default to be restated, and the two would drift.
+ */
+export function defaultWidgetConfig(type: string): WidgetConfig {
+  const scene = defaultScene();
+  scene.widgets = [makeWidget(type)];
+  return widgetFromScene(scene);
+}
+
+/** Whether a record is already in the single-widget shape. */
+export function isWidgetConfig(raw: unknown): raw is WidgetConfig {
+  if (!raw || typeof raw !== "object") return false;
+  const source = raw as Record<string, unknown>;
+  return typeof source.type === "string" && !Array.isArray(source.widgets);
 }
 
 /**

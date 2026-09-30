@@ -35,6 +35,20 @@ export type Part = [number, number, number, number, string, boolean?];
 export interface AstroPose {
   id: string;
   parts: Part[];
+  /**
+   * Identity of the sprite the parts describe, from the engine.
+   *
+   * The layer used to derive this itself by flattening the parts into a string,
+   * which cost a ~700-character string per astronaut per frame — 45 astronauts
+   * at 60fps is 2700 of them a second, built to be thrown away. The engine
+   * already knows every input `astroParts` reads, so it states the identity and
+   * the layer does no hashing at all.
+   *
+   * It must name every trait that changes the pixels: facing, walk frame, leg,
+   * waving, sleeping, rank, badge and hue. Miss one and the sprite silently
+   * keeps the wrong colours.
+   */
+  variant: string;
   /** CSS pixels, top-left of the astronaut's 17px grid origin. */
   x: number;
   y: number;
@@ -135,7 +149,28 @@ export function mountAstro3D(canvas: HTMLCanvasElement, opts?: { pixelScale?: nu
   const shadowMat = new THREE.SpriteMaterial({ map: shadow, transparent: true, opacity: 0.35, depthWrite: false });
   const spriteMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: true });
 
-  const pool = new Map<string, { sprite: THREE.Sprite; shadow: THREE.Sprite; tex: THREE.Texture; key: string }>();
+  const pool = new Map<string, Entry>();
+
+  /**
+   * Baked variants kept per astronaut.
+   *
+   * Four is deliberate. The walk cycle alternates two leg frames and nothing
+   * else moves while an astronaut is just walking, so the live working set is
+   * two; a flip runs through four facings and evicts the oldest, which costs one
+   * rebake at the end of a flip rather than one every frame forever. Without a
+   * cache a 45-astronaut scene rebaked ~100 textures a second — a canvas element,
+   * a full redraw and a GPU upload each — which is what made the scene crawl.
+   */
+  const VARIANTS = 4;
+
+  interface Entry {
+    sprite: THREE.Sprite;
+    shadow: THREE.Sprite;
+    tex: THREE.Texture;
+    variant: string;
+    /** variant -> texture, oldest first. */
+    cache: Map<string, THREE.Texture>;
+  }
 
   let W = 1;
   let H = 1;
@@ -143,7 +178,8 @@ export function mountAstro3D(canvas: HTMLCanvasElement, opts?: { pixelScale?: nu
   function dispose(id: string) {
     const e = pool.get(id);
     if (!e) return;
-    e.tex.dispose();
+    for (const tex of e.cache.values()) tex.dispose();
+    e.cache.clear();
     group.remove(e.sprite);
     group.remove(e.shadow);
     pool.delete(id);
@@ -158,10 +194,8 @@ export function mountAstro3D(canvas: HTMLCanvasElement, opts?: { pixelScale?: nu
 
       let z = 0;
       for (const pose of poses) {
-        // A new texture per distinct pose is too much to bake every frame, so the
-        // key is the pose's shape. Positions change constantly; parts only change
-        // on the walk cycle, a flip, or a sleep transition.
-        const key = `${pose.facing}:${pose.alpha < 1 ? "s" : "a"}:${pose.parts.flat().join(",")}`;
+        // Only a new pose shape needs a texture. Positions change constantly and
+        // never touch the texture, so they cost nothing.
         let e = pool.get(pose.id);
         if (!e) {
           const tex = bakeTexture(pose.parts, px);
@@ -169,16 +203,38 @@ export function mountAstro3D(canvas: HTMLCanvasElement, opts?: { pixelScale?: nu
           const sh = new THREE.Sprite(shadowMat);
           group.add(sprite);
           group.add(sh);
-          e = { sprite, shadow: sh, tex, key };
+          e = { sprite, shadow: sh, tex, variant: pose.variant, cache: new Map([[pose.variant, tex]]) };
           pool.set(pose.id, e);
-        } else if (e.key !== key) {
-          // The walk cycle advanced: rebake in place, keep the same object so the
-          // position does not pop.
-          e.tex.dispose();
-          e.tex = bakeTexture(pose.parts, px);
-          (e.sprite.material as THREE.SpriteMaterial).map = e.tex;
-          (e.sprite.material as THREE.SpriteMaterial).needsUpdate = true;
-          e.key = key;
+        } else if (e.variant !== pose.variant) {
+          const hit = e.cache.get(pose.variant);
+          if (hit) {
+            // Seen before: re-insert so the least recently used one is the one
+            // that gets evicted.
+            e.cache.delete(pose.variant);
+            e.cache.set(pose.variant, hit);
+            e.tex = hit;
+            e.variant = pose.variant;
+            // Swapping the map on a material that already has one needs no
+            // needsUpdate: three re-uploads per texture version, and every
+            // texture here was created with the same settings.
+            (e.sprite.material as THREE.SpriteMaterial).map = hit;
+          } else {
+            const fresh = bakeTexture(pose.parts, px);
+            if (e.cache.size >= VARIANTS) {
+              const oldest = e.cache.keys().next().value;
+              if (oldest !== undefined) {
+                const dead = e.cache.get(oldest)!;
+                e.cache.delete(oldest);
+                // The sprite may still be showing it this frame; only the cache
+                // loses it, and it is replaced below before anything is drawn.
+                if (dead !== fresh) dead.dispose();
+              }
+            }
+            e.cache.set(pose.variant, fresh);
+            e.tex = fresh;
+            e.variant = pose.variant;
+            (e.sprite.material as THREE.SpriteMaterial).map = fresh;
+          }
         }
 
         // Back to front, so a nearer astronaut covers a farther one and the

@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import type { CustomiserProps } from "@/lib/widgets/types";
 import { AstronautCustomizer } from "./AstronautCustomizer";
 import { LiveChatCustomizer } from "./LiveChatCustomizer";
+import { SocialCustomizer } from "./SocialCustomizer";
 
 /**
  * Widgets that replace the generated form with a bespoke one.
@@ -19,6 +20,7 @@ import { LiveChatCustomizer } from "./LiveChatCustomizer";
 const CUSTOMISERS: Record<string, ComponentType<CustomiserProps>> = {
   astro: AstronautCustomizer,
   chat: LiveChatCustomizer,
+  social: SocialCustomizer,
 };
 
 export function customiserFor(type: string): ComponentType<CustomiserProps> | undefined {

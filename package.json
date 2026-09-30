@@ -14,7 +14,6 @@
     "test:astro-consume": "tsc -p apps/web/tests/tsconfig.consume.json && node apps/web/tests/astro-consume.cjs",
     "test:registry": "tsc -p apps/web/tests/tsconfig.registry.json && node apps/web/tests/widget-registry.cjs",
     "test:scene": "tsc -p apps/web/tests/tsconfig.scene.json && node apps/web/tests/scene-ids.cjs",
-    "test:drag": "tsc -p apps/web/tests/tsconfig.drag.json && node apps/web/tests/drag.cjs",
     "test:middleware": "tsc -p apps/web/tests/tsconfig.middleware.json && node apps/web/tests/middleware.cjs",
     "test:socketlog": "tsc -p apps/web/tests/tsconfig.socketlog.json && node apps/web/tests/socket-log.cjs",
     "typecheck": "tsc --noEmit -p apps/web/tsconfig.json",

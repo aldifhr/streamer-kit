@@ -1272,7 +1272,20 @@ export function createAstroEngine(opts: {
   function resize(w: number, h: number) {
     W = w;
     H = h;
-    PX = cfg.pixelSize > 0 ? cfg.pixelSize : Math.max(2, Math.round(Math.min(W, H) / 180));
+    // The backing store is deliberately smaller than the frame and the browser
+    // scales it back up, which is the pixel-art look. The factor is derived from
+    // the *width* on purpose: the old derivation used min(W, H), and in a 16:9
+    // frame that is always the short side, so `min / 180` is always ≤ 1, rounds to
+    // 0 or 1, and the `max(2, ...)` floor took over every single time. Every
+    // landscape stream therefore got a 2x backing store regardless of its real
+    // size — a 300x150 preview drew into 150x75, so a globe meant for a 1080p
+    // stream had 150 pixels to work with and looked like a postage stamp.
+    //
+    // Width is the right axis because the roster spreads horizontally and the
+    // crowding that forces PX up is horizontal too. The cap keeps the backing
+    // store bounded on an ultrawide: 1x at 1920, and never more than 640 logical
+    // pixels across, which is beyond what the drawing code can usefully fill.
+    PX = cfg.pixelSize > 0 ? cfg.pixelSize : clamp(Math.round(w / 360), 1, 3);
     LW = Math.ceil(W / PX);
     LH = Math.ceil(H / PX);
     canvas.width = LW;

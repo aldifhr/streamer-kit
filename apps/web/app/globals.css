@@ -54,7 +54,7 @@ body {
 
 /* A fill widget owns the whole frame, so it is pinned to the scene's edges
    rather than placed at a fractional offset. */
-.sk-widget-fill {
+.sk-fill {
   position: absolute;
   inset: 0;
   transform: none;

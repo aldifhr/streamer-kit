@@ -1,2 +1,4 @@
 .next
 node_modules
+# Local secrets — never commit
+.env.local

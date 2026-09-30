@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useMemo } from "react";
+import { anchorTo } from "@/lib/alignment";
 import { globalVars, resolveSurface, styleProps } from "@/lib/css";
 import { useFeed } from "@/lib/feed";
 import { resolve, type SceneConfig, type WidgetInstance } from "@/lib/scene";
@@ -13,18 +14,9 @@ import type { Entry } from "@/lib/widgets/types";
  *
  * There is no scene to arrange any more: each record is a single widget and OBS
  * positions and sizes each browser source, so this page draws that widget filling
- * the frame it is given. The only positioning left is which corner it hugs, which
- * is what the widget's stored `x`/`y` used to mean before it became a scene-wide
- * fraction — kept as an alignment so a migrated chat column still sits where it
- * did instead of jumping to the top left.
+ * the frame it is given. The stored `x`/`y` survive only as the corner the
+ * widget hugs — see anchorTo, and the trap it replaced.
  */
-function alignment(x: number, y: number): React.CSSProperties {
-  return {
-    display: "flex",
-    justifyContent: x > 0.6 ? "flex-end" : x < 0.4 ? "flex-start" : "center",
-    alignItems: y > 0.6 ? "flex-end" : y < 0.4 ? "flex-start" : "center",
-  };
-}
 
 function Widget({
   widget,
@@ -53,7 +45,7 @@ function Widget({
       // the frame instead of filling it.
       className={`sk-widget${type.fill ? " sk-fill" : ""}`}
       data-glow={style.glow === true ? "on" : undefined}
-      style={{ ...styleProps(style), ...alignment(widget.x, widget.y) }}
+      style={{ ...styleProps(style), ...anchorTo(widget.x, widget.y, type.fill === true) }}
     >
       <Component
         style={style}

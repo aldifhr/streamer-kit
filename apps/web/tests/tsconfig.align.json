@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "outDir": "../../../node_modules/.cache/stream-kit/align",
+    "rootDir": "..",
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "files": ["../lib/alignment.ts"]
+}

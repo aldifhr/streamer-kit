@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { ScenePreview } from "@/lib/landing/ScenePreview";
-import { heroScene } from "@/lib/landing/scenes";
+import { HeroPreviews } from "@/lib/landing/HeroPreviews";
 import { ThemeSwatch } from "@/lib/editor/ThemeSwatch";
+import { WidgetGrid } from "@/lib/landing/WidgetGrid";
 
 import { THEMES } from "@/lib/scene";
 import { WIDGET_LIST } from "@/lib/widgets/registry";
@@ -9,18 +9,18 @@ import { WIDGET_LIST } from "@/lib/widgets/registry";
 const STEPS = [
   {
     step: "01",
-    title: "Pick a starting point",
-    body: "Choose a template — chat only, chat plus alerts, the full kit, or a pixel-art scene your viewers walk around in.",
+    title: "Pick a widget",
+    body: "Chat, alerts, a viewer count, a goal bar, or a pixel-art scene your viewers drift around in. Each one is its own overlay.",
   },
   {
     step: "02",
-    title: "Arrange your widgets",
-    body: "Move each one, restyle it, or add another. Every value is adjustable, and you can test any event before you go live.",
+    title: "Style it",
+    body: "Colours, sizes, spacing, what each event card looks like — all adjustable, and you can fire a test event to see it before you go live.",
   },
   {
     step: "03",
     title: "Paste into OBS",
-    body: "Copy the overlay URL into a Browser Source and size it to your canvas. That is the whole integration.",
+    body: "Copy the overlay URL into a Browser Source, size it to your canvas, and place it in the source's properties. That is the whole integration.",
   },
 ];
 
@@ -47,7 +47,7 @@ const FAQ = [
   },
   {
     q: "Can I run more than one overlay?",
-    a: "Yes. Each overlay has its own URL, its own scene and its own live connection, so several streams can run side by side.",
+    a: "Yes. Each overlay has its own URL, its own widget and its own live connection, so several streams can run side by side.",
   },
 ];
 
@@ -102,8 +102,8 @@ export default function Home() {
 
               <p className="mt-6 max-w-lg text-pretty text-lg leading-relaxed text-neutral-400">
                 Chat, alert cards, a live viewer count, a goal bar, or a pixel-art scene where your
-                viewers float around as astronauts. Pick the pieces, style each one, and paste a
-                single URL into OBS.
+                viewers float around as astronauts. Every widget is its own overlay with its own URL,
+                and you paste that URL into OBS.
               </p>
 
               <div className="mt-9 flex flex-col gap-3 sm:flex-row">
@@ -126,19 +126,12 @@ export default function Home() {
               </p>
             </div>
 
-            {/* The actual renderer, showing the actual scene a new overlay gets. */}
+            {/* The actual renderer, showing the actual overlays a streamer ends up
+                holding — one widget per Browser Source, not one composed scene. */}
             <div className="relative">
-              <div className="overflow-hidden rounded-xl border border-white/10 bg-[#08080a] shadow-2xl shadow-black/60">
-                <div className="flex items-center gap-2 border-b border-white/10 bg-neutral-950 px-3 py-2">
-                  <span className="h-2.5 w-2.5 rounded-full border border-white/20" />
-                  <span className="h-2.5 w-2.5 rounded-full border border-white/20" />
-                  <span className="h-2.5 w-2.5 rounded-full border border-white/20" />
-                  <span className="ml-2 font-mono text-[10px] text-neutral-600">Browser Source</span>
-                </div>
-                <ScenePreview scene={heroScene()} />
-              </div>
+              <HeroPreviews />
               <p className="mt-3 text-center text-xs text-neutral-600">
-                Chat, alerts, a viewer count and a goal bar — one scene, one URL.
+                Four overlays, four URLs — one Browser Source each.
               </p>
             </div>
           </div>
@@ -149,38 +142,17 @@ export default function Home() {
           <div className="mx-auto max-w-6xl">
             <div className="max-w-2xl">
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                {WIDGET_LIST.length} widgets. One scene.
+                {WIDGET_LIST.length} widgets. One overlay each.
               </h2>
               <p className="mt-4 text-neutral-500">
-                A scene is a list of widgets, and each one owns its own settings. Add a second chat
-                column, put alerts in the centre while chat sits in the corner, or drop the chat
-                entirely.
+                A widget is the whole overlay: its own URL, its own Browser Source, its own
+                settings. Chat in the corner and a goal bar along the bottom is two overlays, not
+                one scene to arrange — you place each one in OBS, where the rest of your layout
+                already lives.
               </p>
             </div>
 
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {WIDGET_LIST.map((w) => (
-                <div
-                  key={w.id}
-                  className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 transition hover:border-white/25"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className="text-lg">{w.icon}</span>
-                    <h3 className="text-base font-semibold">{w.label}</h3>
-                    {w.fill ? (
-                      <span className="rounded border border-white/15 px-1.5 py-0.5 text-[10px] text-neutral-500">
-                        full frame
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-neutral-500">{w.blurb}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* No templates any more. Each overlay is one widget with its own URL,
-                so the thing to choose is the widget — and the grid above already
-                is that list, with each one's description. */}
+            <WidgetGrid />
           </div>
         </section>
 
@@ -190,9 +162,9 @@ export default function Home() {
             <div className="max-w-2xl">
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">Themes, then make it yours</h2>
               <p className="mt-4 text-neutral-500">
-                A theme sets the chat widget and the scene&apos;s shared typography; every widget keeps
-                its own controls afterwards. Or skip it and write your own CSS against the same
-                custom properties.
+                A theme sets the shared typography and the chat card — the two things every overlay
+                would otherwise have to be styled by hand. Every widget keeps its own controls on top
+                of it. Or skip it and write CSS against the same custom properties.
               </p>
             </div>
 

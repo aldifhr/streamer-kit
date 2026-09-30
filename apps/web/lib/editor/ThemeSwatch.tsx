@@ -115,7 +115,14 @@ export function ThemeSwatch({ theme, type = "chat" }: { theme: Theme; type?: str
 
   // Scoped to the swatch so six themes on one page cannot clobber each other's
   // variables, unlike the :root the overlay injects.
-  const vars = `.sk-swatch{${globalVars(global, SWATCH_SCALE)}${styleVars(style, SWATCH_SCALE)}}`;
+  //
+  // The trailing `;` is load-bearing. globalVars() and styleVars() each return a
+  // `;`-joined list with no terminator of their own, so concatenating them raw
+  // glues the last global var onto the first widget var. The browser then reads
+  // `--sk-user-alert:#ffffff--w-bg:...` as one declaration and --w-bg is never
+  // declared at all — which silently dropped the widget background from every
+  // swatch, and the background is most of what the six themes disagree about.
+  const vars = `.sk-swatch{${globalVars(global, SWATCH_SCALE)};${styleVars(style, SWATCH_SCALE)}}`;
 
   const fill = (WIDGET_TYPES[type]?.fill ?? false) && type !== "chat";
   // A full-frame widget needs a frame to fill, or its canvas measures zero.

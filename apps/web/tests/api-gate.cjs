@@ -447,16 +447,31 @@ async function main() {
     // The overlay connects from OBS, which has no password, so this one write has
     // to work signed out. Gating it left the overlay unable to ever reach a room,
     // which is why a live stream showed the sample scene.
-    const connect = await req("/api/connect", {
-      method: "POST",
-      body: { username: "chan", overlay_id: "ov1" },
-    });
+    //
+    // `/api/overlay-connect/<id>`, not `/api/connect`. The second takes the room
+    // from the request body, so opening it would let any anonymous caller aim
+    // your live stream at a room of their choosing — and the proxy is the only
+    // thing between the internet and that body. The scoped path takes no body at
+    // all; the backend reads the username from the overlay's own config, so it
+    // can only connect the room that overlay already names. See
+    // apps/api/test_overlay_connect.py for the backend half.
+    const connect = await req("/api/overlay-connect/ov1", { method: "POST" });
     check("the overlay can connect without a session", connect.status === 502, `got ${connect.status}`);
+
+    // The room-aiming verb stays shut, and it must stay shut even though the
+    // overlay just proved the POST verb is open on a nearby path.
+    const aim = await req("/api/connect", { method: "POST", body: { username: "chan", overlay_id: "ov1" } });
+    check("aiming the room at a username still needs a session", aim.status === 401, `got ${aim.status}`);
 
     // Naming `/api/connect` must not open the rest of the verb on that path, or
     // the next one added would inherit the exemption.
     const stop = await req("/api/connect", { method: "DELETE" });
     check("disconnecting still needs a session", stop.status === 401, `got ${stop.status}`);
+
+    // A prefix match on the exemption would open `/api/overlay-connect/<id>/extra`
+    // too, so the shape is pinned rather than trusted.
+    const extra = await req("/api/overlay-connect/ov1/extra", { method: "POST" });
+    check("a deeper path under the exemption is still closed", extra.status === 401, `got ${extra.status}`);
 
     const other = await req("/api/connect/ov1", { method: "POST", body: {} });
     check("a path that merely starts the same is still closed", other.status === 401, `got ${other.status}`);

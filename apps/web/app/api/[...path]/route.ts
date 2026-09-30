@@ -65,10 +65,28 @@ type Params = { params: Promise<{ path: string[] }> };
  * what stops a POST from riding in on the back of this.
  */
 function isPublicOverlayRead(request: NextRequest): boolean {
-  if (request.method !== "GET") return false;
   const path = request.nextUrl.pathname;
-  if (/^\/api\/overlays\/[^/]+$/.test(path)) return true;
-  return /^\/api\/polls\/[^/]+(?:\/vote)?$/.test(path);
+  if (request.method === "GET") {
+    if (/^\/api\/overlays\/[^/]+$/.test(path)) return true;
+    if (/^\/api\/polls\/[^/]+(?:\/vote)?$/.test(path)) return true;
+    return false;
+  }
+  // `POST /api/overlay-connect/<id>` is here for the same reason the reads are.
+  // OBS loads /overlay/<id> on the streamer's own machine with no password, and
+  // the overlay connects to the room from there — so gating this left the overlay
+  // unable to ever reach a stream, and the scene you watched was the sample scene.
+  //
+  // Scoped, rather than opening /api/connect itself: that endpoint takes the
+  // username from the request body and aims the one global room at it, so
+  // opening it would let anyone point your live stream at a room they chose.
+  // The overlay-connect path takes no body — the backend reads the username from
+  // the overlay's saved config — so it can only ever connect the room that
+  // overlay already names.
+  //
+  // Narrow on purpose: this exact prefix and method. Disconnecting is a different
+  // verb on the old path and stays behind the session, as does /api/connect.
+  if (request.method === "POST" && /^\/api\/overlay-connect\/[^/]+$/.test(path)) return true;
+  return false;
 }
 
 async function proxy(request: NextRequest, { params }: Params): Promise<Response> {

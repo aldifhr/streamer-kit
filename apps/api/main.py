@@ -296,13 +296,49 @@ async def update_overlay_config(overlay_id: str, req: ConfigUpdateRequest):
 # --------------------------------------------------------------------------
 
 
+@router.post("/api/overlay-connect/{overlay_id}")
+async def overlay_connect(overlay_id: str):
+    """Connect the room an overlay is already configured for, with no login.
+
+    OBS loads /overlay/<id> on the streamer's own machine and cannot log in, so
+    /api/connect — which takes the username from the request and can therefore
+    aim the global room at anything — is closed to it. That left the overlay
+    unable to ever reach a stream and showing the sample scene forever.
+
+    The difference here is that the username is not taken from the request. It is
+    read from the overlay's own saved config, so this can only ever connect the
+    room that overlay already names. A caller who wants a different room has to
+    change the config first, which is behind the session. There is no body to
+    forge and no path to hijack another overlay's stream.
+    """
+    username = store.username_of(overlay_id).strip().lstrip("@")
+    if not username:
+        # No config to honour is a configuration error, not an auth error, and
+        # saying "not signed in" would send the caller looking for a password
+        # that cannot possibly help.
+        raise HTTPException(
+            status_code=409,
+            detail="overlay has no username configured; set one in the editor",
+        )
+    return await _connect_room(overlay_id, username)
+
+
 @router.post("/api/connect")
 async def connect(req: ConnectRequest):
     overlay_id = req.overlay_id or "default"
     username = req.username.strip().lstrip("@")
     if not username:
         raise HTTPException(status_code=400, detail="username is required")
+    return await _connect_room(overlay_id, username)
 
+
+async def _connect_room(overlay_id: str, username: str) -> dict:
+    """Point the one global room at `username`, replacing any previous source.
+
+    Shared by the session-gated /api/connect and the config-scoped
+    /api/overlay-connect, so the two cannot drift apart in how they start or
+    report a source.
+    """
     existing = sources.get(overlay_id)
     if existing and existing.is_running() and existing.username == username:
         # Idempotent path. The ConnectEvent for this source already fired

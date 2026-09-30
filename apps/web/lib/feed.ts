@@ -113,11 +113,14 @@ export function useFeed(overlayId: string): Feed {
         // cause is the API having STREAMKIT_TOKEN set while this build has no
         // matching STREAMKIT_API_TOKEN to attach at the proxy. That is worth
         // saying out loud rather than failing quietly on stream.
-        apiFetch("/api/connect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: data.username, overlay_id: overlayId }),
-        })
+        // The overlay-connect path, not /api/connect. This runs on the overlay
+        // page, which OBS loads with no session, so the session-gated connect is
+        // a 401 here and the scene stays the sample scene forever — which is
+        // what the red "token mismatch" notice was actually reporting. The
+        // scoped endpoint takes no body: the backend reads the username from
+        // this overlay's own saved config, so it can only ever connect the room
+        // this overlay already names.
+        apiFetch(`/api/overlay-connect/${overlayId}`, { method: "POST" })
           .then((res) => {
             if (res.status === 401) {
               setError("API rejected the request — token mismatch");

@@ -26,12 +26,32 @@ import { SESSION_COOKIE, isValidSession } from "@/lib/session";
  */
 const PUBLIC = ["/login", "/api/session", "/overlay", "/_next", "/favicon"];
 
+/**
+ * Whether a path is one of the public ones.
+ *
+ * On whole path segments, not with `startsWith`. `/overlay` is the OBS route and
+ * `/overlays/<id>` is the editor, and a prefix test cannot tell them apart:
+ * `"/overlays/abc".startsWith("/overlay")` is true, so the editor was being
+ * served to anyone who asked. It looked harmless because the editor's own fetches
+ * still got 401s from the proxy, so an anonymous visitor saw an error rather than
+ * anyone's overlays — but the page should not have been reachable at all, and the
+ * same trap applies to `/login`, which quietly also covered `/logins`.
+ *
+ * The trailing-slash form is compared explicitly because the segment below can
+ * never be empty, so `/overlay` and `/overlay/` differ only by that slash.
+ */
+export function isPublicPath(pathname: string): boolean {
+  return PUBLIC.some(
+    (prefix) => pathname === prefix || pathname === `${prefix}/` || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 // Async: the HMAC is WebCrypto, because the Edge runtime this file runs on has
 // no `node:crypto`. Next supports an async middleware function.
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (PUBLIC.some((prefix) => pathname.startsWith(prefix))) {
+  if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
 

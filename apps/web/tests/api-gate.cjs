@@ -44,6 +44,8 @@ let PORT = Number(process.env.GATE_TEST_PORT || 0);
 const PASSWORD = "correct-horse";
 const SECRET = "test-secret-0123456789abcdef";
 const BACKEND = process.env.GATE_TEST_BACKEND || "http://127.0.0.1:9";
+// The suite builds and starts from its own output directory. See ensureBuilt.
+const GATE_DIST = ".next-gate-test";
 
 const failures = [];
 function check(label, cond, detail = "") {
@@ -108,11 +110,28 @@ function req(path, { method = "GET", cookie, body, headers = {} } = {}) {
 }
 
 function startServer(env) {
+  // The build is not reused from `.next`, and that is the whole reason this suite
+  // was measuring the wrong thing.
+  //
+  // `NEXT_PUBLIC_*` is inlined into the client bundle by `next build`, not read at
+  // request time, so passing the stub to `next start` changes nothing. The bundle
+  // already on disk carried the real API hostname, every proxied request reached
+  // the production backend, and the suite read its answers as if they were the
+  // gate's: a 200 and a 404 where a 502 was expected. Nothing in the gate was
+  // wrong. The suite was pointed at a live server it believed was dead.
+  //
+  // A dead port therefore cannot be the target either — connection refused is not
+  // a 502. So the build is done here, with the stub hostname compiled in, into a
+  // directory the test owns and can throw away. Slow, and the only thing that
+  // makes the assertions mean what they claim.
+  // Started from the suite's own build, not `.next`, so the API hostname in the
+  // bundle is the stub and not whatever was compiled in last.
+  //
   // `detached` puts the child in its own process group. `npx` spawns
   // `next-server` as a grandchild, so killing npx alone leaves the server
-  // listening: the next suite then answers on the same port and the test reports
-  // the previous suite's configuration. Killing the group is the only way to take
-  // the whole thing down.
+  // listening: the next scenario then answers on the same port and the test
+  // reports the previous scenario's configuration. Killing the group is the only
+  // way to take the whole thing down.
   const child = spawn(
     "npx",
     ["next", "start", "-p", String(PORT)],
@@ -120,6 +139,7 @@ function startServer(env) {
       cwd: path.resolve(__dirname, ".."),
       env: {
         ...process.env,
+        STREAMKIT_DIST_DIR: GATE_DIST,
         STREAMKIT_API_TOKEN: "backend-token-value",
         STREAMKIT_PASSWORD: PASSWORD,
         STREAMKIT_SESSION_SECRET: SECRET,
@@ -131,6 +151,42 @@ function startServer(env) {
     },
   );
   return child;
+}
+
+/**
+ * Build once, with the stub hostname compiled in, into a directory of our own.
+ *
+ * `next start` cannot be pointed at a different API host at runtime, so the
+ * build has to carry it. Building into `.next` would overwrite whatever the
+ * developer or the deploy had there and be overwritten back, so the suite owns
+ * its output and removes it on the way out.
+ */
+let buildDone = false;
+
+process.on("exit", () => {
+  // The suite's build is large and would otherwise sit in the working tree,
+  // where it shows up as an untracked change and can be committed by accident.
+  try {
+    require("node:fs").rmSync(path.resolve(__dirname, "..", GATE_DIST), { recursive: true, force: true });
+  } catch {}
+});
+function ensureBuilt(env) {
+  if (buildDone) return;
+  const cwd = path.resolve(__dirname, "..");
+  require("node:child_process").execFileSync("npx", ["next", "build"], {
+    cwd,
+    env: {
+      ...process.env,
+      STREAMKIT_DIST_DIR: GATE_DIST,
+      STREAMKIT_API_TOKEN: "backend-token-value",
+      STREAMKIT_PASSWORD: PASSWORD,
+      STREAMKIT_SESSION_SECRET: SECRET,
+      NEXT_PUBLIC_API_URL: BACKEND,
+      ...env,
+    },
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  buildDone = true;
 }
 
 async function waitForServer(timeoutMs = 40000) {
@@ -193,6 +249,11 @@ async function withServer(env, fn) {
   PORT = await freePort();
   while (await portBusy()) PORT = await freePort();
 
+  // Built before the first server starts, and only with the credentials of the
+  // first scenario: the password and secret are read at request time, so a later
+  // scenario overriding them is a different configuration served from the same
+  // bundle.
+  ensureBuilt({});
   const child = startServer(env);
   try {
     if (!(await waitForServer())) throw new Error("server did not start");
@@ -235,11 +296,15 @@ async function main() {
     // Every one of these returned 200 before the gate existed. The body is
     // checked as well as the status: a 401 carrying HTML would be a redirect
     // wearing a 401's status, which an XHR in the editor cannot act on.
+    //
+    // `POST /api/connect` used to be in this list and it was wrong: the overlay
+    // page calls it from OBS, which has no password, so refusing it left the
+    // overlay unable to ever reach a room. It is asserted as open further down,
+    // with the rest of the paths the overlay needs.
     const writes = [
       ["POST /api/overlays", "/api/overlays", "POST", { name: "x" }],
       ["PATCH /api/overlays/{id}", "/api/overlays/abc", "PATCH", { name: "x" }],
       ["DELETE /api/overlays/{id}", "/api/overlays/abc", "DELETE", undefined],
-      ["POST /api/connect", "/api/connect", "POST", { username: "x" }],
       ["POST .../trigger", "/api/overlays/abc/trigger", "POST", {}],
       ["POST .../config", "/api/overlays/abc/config", "POST", { config: {} }],
     ];
@@ -378,6 +443,23 @@ async function main() {
 
     const save = await req("/api/overlays/ov1/config", { method: "POST", body: { theme: "quiet" } });
     check("saving a config still needs a session", save.status === 401, `got ${save.status}`);
+
+    // The overlay connects from OBS, which has no password, so this one write has
+    // to work signed out. Gating it left the overlay unable to ever reach a room,
+    // which is why a live stream showed the sample scene.
+    const connect = await req("/api/connect", {
+      method: "POST",
+      body: { username: "chan", overlay_id: "ov1" },
+    });
+    check("the overlay can connect without a session", connect.status === 502, `got ${connect.status}`);
+
+    // Naming `/api/connect` must not open the rest of the verb on that path, or
+    // the next one added would inherit the exemption.
+    const stop = await req("/api/connect", { method: "DELETE" });
+    check("disconnecting still needs a session", stop.status === 401, `got ${stop.status}`);
+
+    const other = await req("/api/connect/ov1", { method: "POST", body: {} });
+    check("a path that merely starts the same is still closed", other.status === 401, `got ${other.status}`);
   });
 
   console.log("the overlay stays reachable without a login");

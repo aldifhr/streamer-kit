@@ -31,6 +31,27 @@ const nextConfig: NextConfig = {
     root: repoRoot,
   },
   outputFileTracingRoot: repoRoot,
+  // The dev server is reached at 127.0.0.1 locally and over the LAN address when
+  // checking a real browser, and Next blocks its own HMR and font resources for
+  // any origin it does not recognise. The symptom is a dev server that serves
+  // pages but silently never hot-reloads, which is worse than not running one.
+  //
+  // This list is exact, and the first entry is the one that decides: Next takes
+  // the dev origin from the FIRST allowed origin, not from the incoming Host
+  // header, and `request.url` is built from it. So a dev origin of "localhost"
+  // makes every redirect on the site hand out `http://localhost:3100/...` — and
+  // a streamer checking the dashboard over the LAN gets bounced to a hostname
+  // that resolves to their own machine. Put the address that is actually being
+  // typed here.
+  // Next matches these as origins without the port, and warns about the exact
+  // form when it rejects a host — asking for '43.133.32.206', not ':3100'.
+  allowedDevOrigins: ["43.133.32.206", "127.0.0.1", "localhost"],
+  // tests/api-gate.cjs builds and starts its own copy of the app, because
+  // `NEXT_PUBLIC_*` is inlined at build time: a suite that reused `.next` would
+  // proxy to whatever API hostname that build had compiled in, and read a live
+  // server's answers as though they were the gate's. Pointing the build at its
+  // own directory is what makes the gate's own behaviour observable.
+  distDir: process.env.STREAMKIT_DIST_DIR || ".next",
 };
 
 export default nextConfig;

@@ -348,6 +348,12 @@ async function main() {
   // button would silently do nothing and the backend's open GET /vote would never
   // be reached.
   await withServer({}, async () => {
+    // This one is not optional. The overlay fetches its own config from here, and
+    // when it was gated the page 401'd, fell back to the sample scene, and the
+    // stream showed someone else's goal bar plus a red "Overlay not found".
+    const own = await req("/api/overlays/ov1");
+    check("an overlay can read its own config", own.status === 502, `got ${own.status}`);
+
     const read = await req("/api/polls/ov1");
     check("reading a poll needs no session", read.status === 502, `got ${read.status}`);
 
@@ -362,9 +368,16 @@ async function main() {
     const drop = await req("/api/polls/ov1", { method: "DELETE" });
     check("deleting a poll still needs a session", drop.status === 401, `got ${drop.status}`);
 
-    // And it is scoped to /polls: a GET elsewhere is still closed.
-    const other = await req("/api/overlays");
-    check("an unrelated read is still closed", other.status === 401, `got ${other.status}`);
+    // And it is scoped: a list of every overlay stays closed, and so does a write
+    // to a single overlay even though its read is open.
+    const list = await req("/api/overlays");
+    check("listing every overlay is still closed", list.status === 401, `got ${list.status}`);
+
+    const write = await req("/api/overlays/ov1", { method: "DELETE" });
+    check("deleting an overlay still needs a session", write.status === 401, `got ${write.status}`);
+
+    const save = await req("/api/overlays/ov1/config", { method: "POST", body: { theme: "quiet" } });
+    check("saving a config still needs a session", save.status === 401, `got ${save.status}`);
   });
 
   console.log("the overlay stays reachable without a login");

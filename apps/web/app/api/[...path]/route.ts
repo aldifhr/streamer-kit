@@ -44,22 +44,30 @@ const token = process.env.STREAMKIT_API_TOKEN?.trim();
 type Params = { params: Promise<{ path: string[] }> };
 
 /**
- * The one API path a signed-out caller may reach.
+ * The API paths a signed-out caller may reach.
  *
- * The poll widget renders on /overlay/{id}, which OBS loads and which cannot log
- * in. It votes through this proxy, and the proxy refuses everything without a
- * session — so without this exemption the vote button silently does nothing and
- * the backend's deliberately open `GET /vote` is never reached. The widget polls
- * the same path every four seconds for its own state, so the read is open too.
+ * Two of them, and the reason is the same: the overlay page is loaded by OBS on
+ * the streamer's own machine and cannot log in, so anything that page needs has
+ * to work without a session.
  *
- * Narrow on purpose: GET only, and only under /polls. Creating and closing a
- * poll stay behind the session — those are writes, and the method check is what
- * stops `POST /polls/x` from riding in on the back of this. A future vote POST
- * would have to be listed here explicitly rather than inherit access.
+ * `GET /api/overlays/<id>` is how the overlay fetches its own config. Excluding it
+ * broke the product outright — the page 401'd, had no config, and fell back to the
+ * sample scene, so the stream showed a stranger's goal bar reading 66969/100 and a
+ * red "Overlay not found". The backend has always allowed that read; the proxy is
+ * what stopped it.
+ *
+ * The poll read and vote are here for the same reason, and voting is a GET on
+ * purpose: the browser source cannot present a session, so a POST vote could
+ * never be cast from a stream at all.
+ *
+ * Narrow on purpose: GET only, and only these two paths. Every write stays behind
+ * the session — creating and closing a poll included — and the method check is
+ * what stops a POST from riding in on the back of this.
  */
-function isPublicPoll(request: NextRequest): boolean {
+function isPublicOverlayRead(request: NextRequest): boolean {
   if (request.method !== "GET") return false;
   const path = request.nextUrl.pathname;
+  if (/^\/api\/overlays\/[^/]+$/.test(path)) return true;
   return /^\/api\/polls\/[^/]+(?:\/vote)?$/.test(path);
 }
 
@@ -72,7 +80,7 @@ async function proxy(request: NextRequest, { params }: Params): Promise<Response
       headers: { "content-type": "application/json" },
     });
   }
-  if (!(await hasSession(request)) && !isPublicPoll(request)) {
+  if (!(await hasSession(request)) && !isPublicOverlayRead(request)) {
     return new Response(JSON.stringify({ detail: "Not signed in" }), {
       status: 401,
       headers: { "content-type": "application/json" },

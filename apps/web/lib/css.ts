@@ -137,6 +137,13 @@ export const DEFAULT_GLOBAL: GlobalStyle = {
  * Serialise the global layer to custom properties. Colours and lengths are
  * pre-composed here rather than in CSS so a widget never has to know whether
  * a value is a hex or a percentage.
+ *
+ * The returned string is a terminated declaration list, trailing `;` included.
+ * That is not a detail: the two serialisers in this file are meant to be
+ * concatenated, and an unterminated list glues its last declaration onto the
+ * next one. The browser then reads `--sk-user-alert:#ffffff--w-bg:...` as a
+ * single declaration — the widget background is never declared at all, and
+ * nothing warns. Callers should not add their own separator.
  */
 export function globalVars(g: GlobalStyle, scale = 1): string {
   const show = (on: boolean) => (on ? "flex" : "none");
@@ -165,7 +172,7 @@ export function globalVars(g: GlobalStyle, scale = 1): string {
   for (const [kind, colour] of Object.entries(g.usernameColors)) {
     out.push(`--sk-user-${kind}:${token(colour)}`);
   }
-  return out.join(";");
+  return `${out.join(";")};`;
 }
 
 /** The colour a username is painted in, for a given message kind. */
@@ -209,6 +216,10 @@ export function styleValue(key: string, value: StyleValue, scale: number): strin
  * CSS. Visibility is the one exception — a `show-*` key becomes a `display`
  * value so the stylesheet can switch a kind off without the component
  * re-rendering its children.
+ *
+ * Terminated like globalVars(), and for the same reason: the two are
+ * concatenated, and a list that does not end in `;` loses its last declaration
+ * to the first one of whatever comes next.
  */
 export function styleVars(style: StyleMap, scale = 1): string {
   const out: string[] = [];
@@ -219,7 +230,7 @@ export function styleVars(style: StyleMap, scale = 1): string {
     }
     out.push(`--w-${k}:${styleValue(k, v, scale)}`);
   }
-  return out.join(";");
+  return `${out.join(";")};`;
 }
 
 /** The same layer as an inline style object, for a real widget in the scene. */

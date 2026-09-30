@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { bool, num, str } from "@/lib/widgets/style";
 import type { WidgetProps, WidgetType } from "@/lib/widgets/types";
+import { takeNew } from "@/lib/widgets/astro/consume";
 import { createAstroEngine, DEFAULT_ASTRO_CONFIG, type AstroConfig, type AstroEngine } from "./engine";
 /** Reads the widget's style bag into the engine's own config shape. */
 function toConfig(style: Record<string, unknown>): AstroConfig {
@@ -90,12 +91,16 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
-    // `seq` only increases, so this walks only what is new however the buffer
-    // has been trimmed or re-sorted.
-    let start = entries.length - 1;
-    while (start >= 0 && entries[start].seq > consumedRef.current) start--;
-    for (let i = start + 1; i < entries.length; i++) engine.handle(entries[i]);
-    if (entries.length) consumedRef.current = Math.max(consumedRef.current, entries[0].seq);
+    // The marker is the highest seq handled, and it is maintained by takeNew
+    // rather than here: advancing it on `entries[0].seq` — the oldest entry the
+    // ring buffer still holds — left it trailing a long way behind, so every
+    // re-render replayed the buffer and `handle()` awarded the XP again. On a
+    // busy room the same comment was paid out several times over. The arithmetic
+    // and its regression are in tests/astro-consume.cjs.
+    const { fresh, consumed } = takeNew(entries, consumedRef.current);
+    if (fresh.length === 0) return;
+    consumedRef.current = consumed;
+    for (const entry of fresh) engine.handle(entry);
   }, [entries]);
 
   return <canvas ref={canvasRef} className="sk-astro-canvas" />;

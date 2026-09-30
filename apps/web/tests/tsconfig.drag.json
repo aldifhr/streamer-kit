@@ -1,18 +1,26 @@
 {
   "compilerOptions": {
-    "outDir": "../../../node_modules/.cache/stream-kit/drag",
+    "outDir": "../../../node_modules/.cache/stream-kit/astro-consume",
     "rootDir": "..",
     "module": "commonjs",
     "target": "es2022",
-    "lib": ["es2022", "dom"],
+    "lib": [
+      "es2022",
+      "dom"
+    ],
     "jsx": "react-jsx",
     "strict": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "baseUrl": "..",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
-  "files": ["../lib/drag.ts"]
+  "files": [
+    "../lib/drag.ts",
+    "../lib/widgets/astro/consume.ts"
+  ]
 }

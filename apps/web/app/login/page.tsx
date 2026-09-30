@@ -5,12 +5,15 @@
  * an uncontrolled input read at submit time, and the value goes straight to
  * `/api/session`. There is no client bundle here to inspect.
  *
- * The 401 from `/api/session` is reported inline rather than as an alert, so a
- * wrong attempt leaves the field and the cursor where they were.
+ * The form is a native post, so a wrong password is answered by redirecting back
+ * to `/login?error=1` rather than by a 401 body: a browser navigating to a 401
+ * shows the raw JSON and loses the form, so the next attempt would start from
+ * nothing. The error is rendered inline here, leaving the field and the cursor
+ * where they were.
  */
 
-export default async function Login({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
-  const { next } = await searchParams;
+export default async function Login({ searchParams }: { searchParams: Promise<{ next?: string; error?: string }> }) {
+  const { next, error } = await searchParams;
   // Only a same-site path: an absolute URL here would turn the login page into
   // an open redirect.
   const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
@@ -22,6 +25,16 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
           <h1 className="text-lg font-semibold">StreamKit</h1>
           <p className="text-xs text-neutral-500">Masuk untuk mengelola overlay</p>
         </div>
+
+        {/* A wrong password redirects back here with ?error=1. The flag is
+            rendered, never the message: anything interpolated from the query
+            would be reflected content, and the wording is not worth that. The
+            field keeps focus, so the next attempt is one type-and-submit. */}
+        {error ? (
+          <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            Password salah.
+          </p>
+        ) : null}
 
         <input type="hidden" name="next" value={target} />
 

@@ -71,7 +71,10 @@ const http = require("node:http");
  * observe the real status and body.
  */
 function req(path, { method = "GET", cookie, body, headers = {} } = {}) {
-  const payload = body ? JSON.stringify(body) : null;
+  // A string body is sent as written, which is how a native form post arrives
+  // (application/x-www-form-urlencoded). Anything else is JSON, so a test can
+  // write either without knowing the difference.
+  const payload = typeof body === "string" ? body : body ? JSON.stringify(body) : null;
   return new Promise((resolve, reject) => {
     const req = http.request(
       `${base()}${path}`,
@@ -268,6 +271,49 @@ async function main() {
     const bad = await req("/api/session", { method: "POST", body: { password: "wrong" } });
     check("a wrong password is 401", bad.status === 401);
     check("a wrong password sets no cookie", !bad.setCookie);
+
+    // The form path is a different bug and was live on the deployed build: the
+    // login page is a native post, so a 401 body made the browser navigate to
+    // /api/session and display raw JSON, losing the form entirely. The operator
+    // saw an API endpoint instead of a login page.
+    const formBody = "password=wrong&next=%2Fdashboard";
+    const formPost = await req("/api/session", {
+      method: "POST",
+      body: formBody,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    check("a wrong password by form is a redirect", formPost.status === 303, `got ${formPost.status}`);
+    check(
+      "the redirect goes back to the login page",
+      (formPost.location || "").includes("/login"),
+      formPost.location,
+    );
+    check(
+      "the redirect flags the failure",
+      (formPost.location || "").includes("error=1"),
+      formPost.location,
+    );
+    check("the redirect keeps the original target", (formPost.location || "").includes("next="), formPost.location);
+    check("a wrong password by form sets no cookie", !formPost.setCookie);
+
+    // The target is echoed back, so it has to stay a same-site path — otherwise
+    // a wrong password is enough to turn /login into an open redirect.
+    const openPost = await req("/api/session", {
+      method: "POST",
+      body: "password=wrong&next=https%3A%2F%2Fevil.example",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    check(
+      "an absolute target is not echoed into the redirect",
+      !(openPost.location || "").includes("evil.example"),
+      openPost.location,
+    );
+
+    // And the page renders that flag.
+    const loginPage = await req("/login?error=1");
+    check("the login page shows the error", loginPage.body.includes("Password salah"), `status ${loginPage.status}`);
+    const quiet = await req("/login");
+    check("the login page is clean without it", !quiet.body.includes("Password salah"));
 
     const good = await req("/api/session", { method: "POST", body: { password: PASSWORD } });
     check("the right password is 200", good.status === 200, String(good.status));

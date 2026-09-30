@@ -78,6 +78,25 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   if (!supplied || !equalSecret(supplied, password)) {
+    // A wrong password from the login form must not dump raw JSON in the
+    // browser: the form is a native post, so the browser navigates to whatever
+    // this returns, and a 401 JSON body lands the operator on a page of
+    // `{"error":"Wrong password"}` with the address bar reading /api/session —
+    // the field is gone and the cursor with it, so the next attempt starts from
+    // scratch. Sending them back to /login with a flag keeps the form.
+    //
+    // The redirect target is rebuilt from the same single parse of the body,
+    // never re-read, and only ever a same-site path.
+    if (!isJson) {
+      const back =
+        typeof next === "string" && next.startsWith("/") && !next.startsWith("//")
+          ? next
+          : "/dashboard";
+      const url = new URL("/login", request.url);
+      url.searchParams.set("error", "1");
+      url.searchParams.set("next", back);
+      return NextResponse.redirect(url, 303);
+    }
     return NextResponse.json({ error: "Wrong password" }, { status: 401 });
   }
 

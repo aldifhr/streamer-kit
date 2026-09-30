@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { bool, num, str } from "@/lib/widgets/style";
 import type { WidgetProps, WidgetType } from "@/lib/widgets/types";
 import { takeNew } from "@/lib/widgets/astro/consume";
@@ -42,6 +42,11 @@ function toConfig(style: Record<string, unknown>): AstroConfig {
  */
 function Astro({ style, entries, sceneId }: WidgetProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Stacked over the 2D canvas and transparent. Omitted from the DOM when the
+  // browser will not give us a WebGL context — the engine then draws everything
+  // itself, so the overlay still works.
+  const layerRef = useRef<HTMLCanvasElement>(null);
+  const [use3d, setUse3d] = useState(true);
   const engineRef = useRef<AstroEngine | null>(null);
   // Entries already handed over, so a re-render caused by anything other than a
   // new message does not replay the whole buffer into the world.
@@ -53,6 +58,7 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
 
     const engine = createAstroEngine({
       canvas,
+      layerCanvas: layerRef.current ?? undefined,
       // Namespaced per scene: two overlays sharing a browser profile would
       // otherwise share one roster, and astronauts would appear in the wrong
       // stream.
@@ -60,6 +66,10 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
       config: toConfig(style),
     });
     engineRef.current = engine;
+    // If the layer could not mount, take the canvas out of the DOM. It would
+    // otherwise sit on top of a working overlay as an empty box and read to the
+    // streamer as a broken scene — the exact symptom the 2D path exists to avoid.
+    if (layerRef.current && !engine.using3D()) setUse3d(false);
 
     const measure = () => {
       const r = canvas.getBoundingClientRect();
@@ -103,7 +113,17 @@ function Astro({ style, entries, sceneId }: WidgetProps) {
     for (const entry of fresh) engine.handle(entry);
   }, [entries]);
 
-  return <canvas ref={canvasRef} className="sk-astro-canvas" />;
+  return (
+    <>
+      {/* The 2D scene. Always present: it draws the background, and when the 3D
+          layer is unavailable it draws the astronauts too. */}
+      <canvas ref={canvasRef} className="sk-astro-canvas" />
+      {/* The 3D layer. Rendered only while it is in use — a WebGL canvas that
+          failed to get a context is a black box sitting on top of a working
+          overlay, which looks exactly like a broken stream. */}
+      {use3d && <canvas ref={layerRef} className="sk-layer" aria-hidden />}
+    </>
+  );
 }
 
 export const astroWidget: WidgetType = {

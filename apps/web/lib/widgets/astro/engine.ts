@@ -20,6 +20,10 @@
  */
 
 import type { Entry } from "@/lib/widgets/types";
+import { mountAstro3D, type AstroPose } from "./three-layer";
+
+/** The outline the 2D path inflates every part by; the 3D texture pads it back. */
+const PAD = 1;
 
 export interface AstroConfig {
   maxAstro: number;
@@ -75,6 +79,8 @@ export interface AstroEngine {
   resize: (w: number, h: number) => void;
   /** Applied without a remount, so a slider drag does not restart the world. */
   configure: (next: AstroConfig) => void;
+  /** False when no WebGL layer mounted and the 2D path is doing the drawing. */
+  using3D: () => boolean;
   reset: () => void;
   destroy: () => void;
 }
@@ -141,6 +147,8 @@ const OUT = "#14122e";
 
 export function createAstroEngine(opts: {
   canvas: HTMLCanvasElement;
+  /** Optional WebGL surface drawn over the 2D one. Omit for the 2D-only path. */
+  layerCanvas?: HTMLCanvasElement;
   storageKey: string;
   config: AstroConfig;
 }): AstroEngine {
@@ -164,6 +172,9 @@ export function createAstroEngine(opts: {
   const sparks: { x: number; y: number; vx: number; vy: number; life: number; decay: number; c: string; s: number }[] = [];
   const streaks: { x: number; y: number; vx: number; vy: number; delay: number; len: number }[] = [];
   const feed: { text: string; t: number }[] = [];
+  // Republished every frame when the 3D layer is up. Cleared first, so a
+  // despawned astronaut cannot leave a sprite behind holding its texture.
+  const poses: AstroPose[] = [];
   let rocket: { x: number; y: number; t: number; dur: number } | null = null;
   let partyUntil = 0;
   let totalDiamonds = 0;
@@ -651,6 +662,53 @@ export function createAstroEngine(opts: {
 
   /* ------------------------------------------------------------- drawing */
 
+  /**
+   * Optional WebGL layer for the astronauts.
+   *
+   * Everything else in the scene stays 2D — see lib/widgets/astro/three-layer.ts
+   * for why. When the layer mounts, `drawAstro` stops filling rectangles and
+   * publishes a pose instead; when it does not, nothing here changes. So a
+   * missing WebGL context, hardware acceleration disabled in OBS, or a browser
+   * that refuses to give us one all fall through to the path that has been on
+   * stream all along rather than showing the streamer an empty frame.
+   */
+  // Mounted here rather than in createAstroEngine, and deliberately not awaited
+  // inside it: the constructor is sync, and making it async would force every
+  // caller to handle a promise for something that is allowed to be late.
+  //
+  // Three.js is ~540KB and this scene runs in an OBS browser source. Eagerly
+  // imported it would sit in the initial chunk of every page that mounts the
+  // widget, so the overlay would wait on it before its first frame — the exact
+  // stutter a stream cannot absorb. A dynamic import keeps it off the critical
+  // path: the 2D scene starts drawing immediately and the sprites join a beat
+  // later. One frame of flat astronauts is invisible; a blocked first paint is
+  // not.
+  let layer3d: import("./three-layer").AstroLayer3D | null = null;
+  let disposed = false;
+
+  if (opts.layerCanvas) {
+    const layer = opts.layerCanvas;
+    void import("./three-layer")
+      .then((mod) => {
+        // destroy() may have run while Three.js was still in flight — an editor
+        // remount does exactly that — and mounting onto a disposed layer would
+        // leak a WebGL context and its textures.
+        if (disposed) return;
+        layer3d = mod.mountAstro3D(layer, { pixelScale: cfg.pixelSize || 8 });
+        if (!layer3d) return;
+        // The scene was measured before the layer existed, so it has to be
+        // caught up or the sprites would be drawn at a 300x150 default.
+        layer3d.resize(LW, LH, 1);
+        if (W > 0 && H > 0) ensureRunning();
+      })
+      .catch((err) => {
+        // A throw here is a graphics driver problem, never a reason to stop
+        // rendering. The 2D path is already drawing by now.
+        console.warn("[astro] 3D layer unavailable, using 2D", err);
+        layer3d = null;
+      });
+  }
+
   function drawAstro(a: Astro, now: number) {
     const wav = now < a.waveUntil;
     const wf = wav ? Math.floor(now / 160) % 2 : 0;
@@ -663,6 +721,22 @@ export function createAstroEngine(opts: {
     if (a.flipAt && now - a.flipAt < 800) k = Math.floor((now - a.flipAt) / 200) % 4;
     const ox = R(a.x) - 6;
     const oy = R(a.y) - 8 + R(Math.sin(a.t * 1.5 + a.ph)) + R(hop);
+
+    if (layer3d) {
+      // Published rather than drawn. The same astroParts() call, so the 3D and 2D
+      // renderings cannot drift: same walk cycle, same facing frames, same hue.
+      poses.push({
+        id: a.id,
+        parts: astroParts(a, wf, leg, wav).map((p) => xf(p, k) as Part),
+        x: ox - PAD,
+        y: oy - PAD,
+        facing: k,
+        alpha: a.sleeping ? 0.65 : 1,
+        scale: 1 + Math.min(0.35, a.xp / 4000),
+      });
+      return;
+    }
+
     if (a.sleeping) ctx!.globalAlpha = 0.65;
     drawParts(astroParts(a, wf, leg, wav), ox, oy, k);
     ctx!.globalAlpha = 1;
@@ -1253,6 +1327,16 @@ export function createAstroEngine(opts: {
     }
     drawHUD(now);
 
+    if (layer3d) {
+      // Cleared and rebuilt every frame rather than diffed: drawAstro pushes
+      // while the scene draws, so by this point the list is exactly the roster
+      // as rendered this frame. Anything that left the roster simply is not
+      // pushed, and the layer drops the sprite it was holding for it.
+      layer3d.sync(poses);
+      layer3d.render();
+      poses.length = 0;
+    }
+
     frame = requestAnimationFrame(tick);
   };
 
@@ -1297,6 +1381,22 @@ export function createAstroEngine(opts: {
     canvas.style.height = `${LH * PX}px`;
     ctx!.imageSmoothingEnabled = false;
     buildBackground();
+    // The 3D layer gets the *logical* size and the same PX, because the poses
+    // are in logical pixels: drawAstro positions astronauts in the LW/LH grid.
+    // Handing it the CSS size instead would put every sprite one PX off, which on
+    // a 3x scale is three visible pixels of drift per astronaut.
+    if (layer3d && opts.layerCanvas) {
+      // The 2D canvas is resized here, so this canvas is resized here too, or it
+      // keeps its 300x150 default and stretches over a scene it no longer matches.
+      // `renderer.setSize(..., false)` leaves the CSS size alone, so both rules
+      // below are needed: the backing store for precision, the style so it covers
+      // the same box as the scene.
+      opts.layerCanvas.width = LW;
+      opts.layerCanvas.height = LH;
+      opts.layerCanvas.style.width = `${LW * PX}px`;
+      opts.layerCanvas.style.height = `${LH * PX}px`;
+      layer3d.resize(LW, LH, 1);
+    }
     if (W > 0 && H > 0) ensureRunning();
   }
 
@@ -1330,11 +1430,27 @@ export function createAstroEngine(opts: {
       rocket = null;
       persist();
     },
+    // False while the layer is still loading, so the widget does not tear the
+    // canvas out of the DOM during a beat that lasts a few milliseconds.
+    using3D: () => layer3d !== null,
     destroy() {
+      // Set before anything else, so an in-flight dynamic import bails out instead
+      // of mounting a WebGL context onto a scene that is already gone.
+      disposed = true;
       running = false;
       cancelAnimationFrame(frame);
       clearInterval(saveTimer);
       persist();
+      // The layer owns a WebGL context and one texture per astronaut. Not
+      // disposing it here would keep the context alive across a remount, and
+      // browsers cap how many a page may hold — so an editor that remounts the
+      // scene a few times would start losing contexts and fall back to software
+      // rendering on stream.
+      if (layer3d) {
+        layer3d.destroy();
+        layer3d = null;
+      }
+      poses.length = 0;
     },
   };
 }

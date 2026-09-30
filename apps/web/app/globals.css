@@ -68,6 +68,25 @@ body {
   image-rendering: crisp-edges;
 }
 
+/*
+ * The 3D layer, absolutely positioned over the 2D canvas.
+ *
+ * The two are siblings inside the fill widget, so without this the layer would
+ * be a second block box stacked below the scene and push the overlay's own
+ * layout out of shape. `pointer-events: none` because the 2D canvas underneath
+ * is the one the editor drags and the scene draws into — a WebGL canvas on top
+ * would swallow every pointer event on the scene.
+ */
+.sk-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 /* A widget with a glow knob gets one box-shadow value, inherited by the cards
    inside it. Set as a single var rather than per rule so the value lives in one
    place. */

@@ -17,9 +17,11 @@
     "test:drag": "tsc -p apps/web/tests/tsconfig.drag.json && node apps/web/tests/drag.cjs",
     "test:middleware": "tsc -p apps/web/tests/tsconfig.middleware.json && node apps/web/tests/middleware.cjs",
     "test:socketlog": "tsc -p apps/web/tests/tsconfig.socketlog.json && node apps/web/tests/socket-log.cjs",
-    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json"
+    "typecheck": "tsc --noEmit -p apps/web/tsconfig.json",
+    "test:astro-three": "tsc -p apps/web/tests/tsconfig.three.json && node apps/web/tests/astro-three.cjs"
   },
   "devDependencies": {
+    "@types/three": "^0.170.0",
     "typescript": "^5.4.0"
   }
 }

@@ -82,6 +82,12 @@ export interface AstroEngine {
   resize: (w: number, h: number) => void;
   /** Applied without a remount, so a slider drag does not restart the world. */
   configure: (next: AstroConfig) => void;
+  /**
+   * Astronauts on screen, including the ones mid-fade.
+   *
+   * The number the frame loop draws, and the number `maxAstro` is meant to bound.
+   */
+  rosterSize: () => number;
   reset: () => void;
   destroy: () => void;
 }
@@ -639,7 +645,15 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     }
   }
 
-  function ensureAstro(userId: string, nick: string) {
+  /**
+   * The astronaut for a viewer, admitted to the roster if there is room.
+   *
+   * Returns null when the roster is full and the newcomer is not admitted. Every
+   * caller has to cope with that, and none of them credits the newcomer: a cap
+   * of ten means ten people's XP is being tracked, not every viewer in a room of
+   * five thousand.
+   */
+  function ensureAstro(userId: string, nick: string): Astro | null {
     const id = String(userId || "anon");
     seenAt[id] = performance.now();
     let a = astros.get(id);
@@ -648,25 +662,37 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       return a;
     }
     if (astros.size >= cfg.maxAstro) {
+      // Make room by fading the quietest one out rather than deleting it, so
+      // nobody blinks out from under a newcomer mid-sentence.
       let oldest: Astro | null = null;
       for (const o of astros.values()) {
         if (o.leaving) continue;
         if (!oldest || o.lastActive < oldest.lastActive) oldest = o;
       }
       if (oldest) {
-        // Fade the quietest one out rather than deleting it. The roster is over
-        // its cap for half a second, which is invisible; a viewer blinking out
-        // from under a newcomer was not.
         startLeaving(oldest, performance.now());
       } else {
-        // Everything on screen is already leaving, so the cap cannot be met by
-        // waiting. Only then is a hard delete the lesser evil.
+        // Everything on screen is already leaving, so no fade will ever free a
+        // slot and waiting would mean admitting nobody ever again. Drop the one
+        // closest to gone instead; it has the least left to lose.
+        let gone: Astro | null = null;
         for (const o of astros.values()) {
-          if (!o.leaving) continue;
-          astros.delete(o.id);
-          break;
+          if (!gone || o.leave > gone.leave) gone = o;
         }
+        if (gone) astros.delete(gone.id);
       }
+
+      // A fading astronaut is still drawn until its fade completes, so the slot
+      // is not free yet and the newcomer waits for it.
+      //
+      // It used to fall through and admit them anyway, on the reasoning that the
+      // roster would sit one over the cap for half a second and nobody would see
+      // it. That holds for one newcomer and fails for a burst: joins arrive in
+      // bursts, and every entry in the buffer is handed to the engine in one
+      // synchronous loop, so twenty joins retired twenty and admitted twenty and
+      // the roster stood at cap + 20 with not one frame drawn to age them out.
+      // Asking the editor for ten aliens and getting thirty is this branch.
+      if (astros.size >= cfg.maxAstro) return null;
     }
     const rec = store[id] || ({} as Stored);
     const xp = rec.xp || 0;
@@ -1394,6 +1420,10 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       case "comment": {
         const a = ensureAstro(entry.userId, nick);
+        // The roster is full, so this viewer is nobody on screen yet. Their
+        // comment is not spoken, not bubbled and not worth XP for a rank that
+        // does not exist.
+        if (!a) break;
         touch(a);
         a.bubble = clean(entry.value).slice(0, 44);
         a.bubbleUntil = now + 4500;
@@ -1403,6 +1433,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       case "like": {
         const a = ensureAstro(entry.userId, nick);
+        if (!a) break;
         touch(a);
         const n = clamp(Number(entry.meta.count ?? 1), 1, 15);
         gainXP(a, n * 0.2);
@@ -1412,6 +1443,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       case "follow": {
         const a = ensureAstro(entry.userId, nick);
+        if (!a) break;
         touch(a);
         a.badge = true;
         gainXP(a, 5);
@@ -1422,6 +1454,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       case "share": {
         const a = ensureAstro(entry.userId, nick);
+        if (!a) break;
         touch(a);
         if (a.drones.length < 2) a.drones.push({ x: a.x, y: a.y });
         gainXP(a, 3);
@@ -1431,22 +1464,33 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       case "gift": {
         const a = ensureAstro(entry.userId, nick);
-        touch(a);
         const d = Math.max(0, Number(entry.meta.diamonds) || 0);
-        totalDiamonds += d;
-        gainXP(a, Math.max(1, d * 0.5));
-        wave(a);
         const count = Number(entry.meta.count) || 1;
         const giftName = clean(String(entry.meta.giftName ?? "gift"));
-        pushFeed(`${nick} kirim ${giftName}${count > 1 ? ` x${count}` : ""}`);
+        totalDiamonds += d;
 
+        // Everything below the astronaut is scene state, not viewer state: a
+        // gift is worth its crates, its feed line and its rocket even when the
+        // sender has not earned a place on screen. Only the parts that need
+        // somebody to give them to are skipped.
         if (d < cfg.promoteGift) {
           dropCrates(clamp(2 + d, 2, 8));
           shootingStar();
         } else {
+          dropCrates(8);
+        }
+        pushFeed(`${nick} kirim ${giftName}${count > 1 ? ` x${count}` : ""}`);
+        if (d >= cfg.asteroidGift) asteroidShower();
+        if (d >= cfg.rocketGift) launchRocket();
+
+        if (!a) break;
+        touch(a);
+        gainXP(a, Math.max(1, d * 0.5));
+        wave(a);
+
+        if (d >= cfg.promoteGift) {
           flip(a);
           sparkle(a.x, a.y, 30, "#ffe08a");
-          dropCrates(8);
           if (a.rank < 2) {
             a.rank++;
             a.xp = Math.max(a.xp, cfg.rankXP[a.rank] ?? a.xp);
@@ -1454,8 +1498,6 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
             pushFeed(`${nick} naik jadi ${RANKS[a.rank]}`);
           }
         }
-        if (d >= cfg.asteroidGift) asteroidShower();
-        if (d >= cfg.rocketGift) launchRocket();
         break;
       }
     }
@@ -1609,6 +1651,17 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     handle,
     resize,
     configure,
+    /**
+     * How many astronauts are on screen, including the ones mid-fade.
+     *
+     * This is the number the frame loop draws and the number `maxAstro` is meant
+     * to bound, so it is the only honest way to ask whether the cap held — a
+     * draw-call count also moves with crates, sparks and the feed, and a test
+     * that watched it reported a breach that was really just a busier frame.
+     */
+    rosterSize() {
+      return astros.size;
+    },
     reset() {
       store = {};
       dirty = true;

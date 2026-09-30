@@ -228,7 +228,59 @@ runFrames(3);
 check("a one-view wobble retires nobody", drawCalls === restored,
   `wobble=${drawCalls} base=${restored}`);
 
+console.log("the cap is a cap: a burst of joins cannot push past it");
+engine.reset();
+const CAP = 10;
+engine.configure({ ...cfg, maxAstro: CAP, space: false, pixelSize: 3, censors: false });
+engine.resize(1920, 1080);
+
+for (let i = 0; i < CAP; i++) {
+  engine.handle(entry(++seq, "join", `cap${i}`, `cap${i}`, "", { viewers: liveRoom }));
+}
+runFrames(3);
+check("a roster fills to the cap and stops", engine.rosterSize() === CAP,
+  `size=${engine.rosterSize()}`);
+
+// The widget hands every entry in the socket buffer to the engine in one
+// synchronous loop, so this is what a burst of joins actually is: not thirty
+// frames with a fade finishing in between, but thirty retirements and thirty
+// admissions before a single frame is drawn. `ensureAstro` used to retire the
+// quietest astronaut to make room and then admit the newcomer anyway, on the
+// reasoning that the roster would be one over the cap for half a second. One
+// newcomer, yes. Thirty at once put thirty on top of the cap, and the editor's
+// "Max on screen: 10" became the number of people already settled rather than
+// the number allowed.
+const burst = 30;
+for (let i = 0; i < burst; i++) {
+  engine.handle(entry(++seq, "join", `burst${i}`, `burst${i}`, "", { viewers: liveRoom }));
+}
+check(`a ${burst}-join burst does not exceed a cap of ${CAP}`, engine.rosterSize() <= CAP,
+  `size=${engine.rosterSize()} burst=${burst} cap=${CAP}`);
+
+// Fading astronauts are still drawn, so letting the fades finish is what proves
+// the cap is the cap rather than a coincidence of this batch.
+runFrames(60);
+check("the roster comes back under the cap, not above it", engine.rosterSize() <= CAP,
+  `size=${engine.rosterSize()} cap=${CAP}`);
+
+// And the refused newcomers are not punished for having arrived while it was
+// full: they are simply not on screen yet.
+const beforeAdmit = engine.rosterSize();
+for (let i = 0; i < CAP; i++) {
+  engine.handle(entry(++seq, "comment", `burst${i}`, `burst${i}`, "halo", {}));
+}
+runFrames(3);
+check("a viewer refused by the cap can still get on screen afterwards",
+  engine.rosterSize() <= CAP, `before=${beforeAdmit} now=${engine.rosterSize()} cap=${CAP}`);
+
 console.log("leaving the scene is not losing your rank");
+// Emptied first, deliberately. This block is about persistence, not about the
+// cap, and it used to pass or fail on whatever roster the block above happened
+// to leave behind: with the cap enforced, a full roster refuses a newcomer's
+// comment, so `regular` earned no XP and there was nothing to persist. The
+// check below is only about what a viewer who *was* on screen keeps.
+engine.reset();
+engine.configure({ ...cfg, space: false, pixelSize: 3, censors: false });
 // Only a viewer who has earned something is in the saved roster at all: a join
 // on its own grants no XP, so there is nothing to write. This is the real
 // traffic — people who chat, like and gift.

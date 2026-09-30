@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "outDir": "../../../node_modules/.cache/stream-kit/drag",
+    "outDir": "../../../node_modules/.cache/stream-kit/astro-consume",
     "rootDir": "..",
     "module": "commonjs",
     "target": "es2022",
@@ -20,6 +20,6 @@
     }
   },
   "files": [
-    "../lib/drag.ts"
+    "../lib/widgets/astro/consume.ts"
   ]
 }

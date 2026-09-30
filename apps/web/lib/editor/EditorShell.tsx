@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { apiFetch, wsUrl } from "@/lib/api";
+import { usePreviewMessages } from "@/lib/drag-listen";
+import { round4, type WidgetMovedMessage } from "@/lib/drag";
+import { append, clock, summariseEvent, type LogLine } from "@/lib/socket-log";
 import { DEFAULT_GLOBAL, type StyleMap, type StyleValue } from "@/lib/css";
 import {
   THEMES,
@@ -102,6 +105,9 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   // first screen — and every per-widget setting lives under Widgets anyway.
   const [section, setSection] = useState<SectionId>("widgets");
   const [selected, setSelected] = useState<string | null>(null);
+  /** What the overlay socket is actually receiving, newest at the bottom. */
+  const [log, setLog] = useState<LogLine[]>([]);
+  const nextId = useRef(0);
   const [loading, setLoading] = useState(true);
   const [viewport, setViewport] = useState<ViewportKey>("1920x1080");
   const [zoom, setZoom] = useState<Zoom>("fit");
@@ -219,6 +225,35 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       widgets: prev.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
     }));
   }, []);
+
+  /**
+   * Drag on the canvas.
+   *
+   * The preview is a real iframe, so the pointer lands inside it and the editor
+   * never sees a move. The overlay measures the drag against its own box and
+   * posts the result as fractions; we turn those back into x/y. Trusting the
+   * numbers rather than recomputing them is what keeps the widget under the
+   * cursor at any zoom — the iframe is CSS-scaled here, so editor-side maths
+   * would have to undo the scale and could drift.
+   */
+  const [preview, setPreview] = useState<Window | null>(null);
+
+  const onCanvasMove = useCallback(
+    (m: WidgetMovedMessage) => {
+      // Rounded to four places: a drag emits a message per pointer move, and
+      // the saved config is compared for equality elsewhere, so a long tail of
+      // digits would show up as a dirty state that never settles.
+      patchWidget(m.id, { x: round4(m.x), y: round4(m.y) });
+      setSelected(m.id);
+    },
+    [patchWidget],
+  );
+
+  usePreviewMessages({
+    frame: preview,
+    onMove: onCanvasMove,
+    onSelect: setSelected,
+  });
 
   const patchStyle = useCallback(
     (id: string, key: string, value: StyleValue) => {
@@ -342,22 +377,50 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
 
   // Real connection state from the same broadcast the overlay sees; trusting
   // /api/connect's 200 would always show "Live" even for a dead username.
+  //
+  // This socket also feeds the log in the Channel panel. It is the same frames
+  // the overlay renders from, recorded rather than discarded: a panel that can
+  // only say "Live" is indistinguishable from one where nothing is arriving.
   useEffect(() => {
     if (loading) return;
     const ws = new WebSocket(wsUrl(`/ws/overlay/${overlayId}`));
+    const counts: Record<string, number> = {};
+    const note = (kind: LogLine["kind"], text: string) =>
+      setLog((prev) => append(prev, { id: nextId.current++, at: Date.now(), kind, text }));
+
+    ws.onopen = () => note("system", "socket open");
+    ws.onclose = () => note("system", "socket closed — retrying from the server's side");
+    ws.onerror = () => note("error", "socket error");
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data);
+      // A parse failure here would throw out of the handler and silently kill
+      // every later message, leaving the log frozen on the last good frame with
+      // nothing to indicate why. One bad frame should cost one line.
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(e.data);
+      } catch {
+        note("error", "unparseable frame from the socket");
+        return;
+      }
       if (data.type === "status") {
         if (data.connected) {
           setStatus("connected");
           setError(null);
+          note("status", data.message ? String(data.message) : "connected");
         } else {
           // A snapshot mid-handshake says "connecting"; a genuine drop does not.
           setStatus(data.connecting ? "connecting" : "idle");
+          note("status", data.message ? String(data.message) : data.connecting ? "connecting" : "disconnected");
         }
       } else if (data.type === "error") {
         setStatus("error");
-        setError(data.message);
+        const message = String(data.message ?? "error");
+        setError(message);
+        note("error", message);
+      } else if (data.type !== "config") {
+        // config is the scene being pushed in; the panel shows that already, and
+        // one line per save would bury everything else.
+        note("event", summariseEvent(data, counts));
       }
     };
     return () => ws.close();
@@ -612,6 +675,56 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
                       )}
                     </div>
                     {error ? <p className="mt-2 text-xs text-neutral-500">{error}</p> : null}
+
+                    {/*
+                      What the socket is actually receiving.
+
+                      The status chip above is derived from the same frames, so it
+                      can only ever say connected or not — it cannot tell "live and
+                      receiving" from "live and silent", which is the difference
+                      that matters when a widget is not showing anything. These
+                      lines are the events themselves, capped, so a room that is
+                      working is visibly working.
+                    */}
+                    <div className="mt-4">
+                      <div className="mb-1.5 flex items-baseline justify-between">
+                        <span className="text-xs text-neutral-500">Socket log</span>
+                        {log.length ? (
+                          <button
+                            onClick={() => setLog([])}
+                            className="text-[10px] text-neutral-600 transition hover:text-neutral-400"
+                          >
+                            clear
+                          </button>
+                        ) : null}
+                      </div>
+                      {log.length === 0 ? (
+                        <p className="text-[11px] leading-relaxed text-neutral-600">
+                          Waiting for the first event. If the room is live and this stays empty,
+                          the backend is not reaching the room.
+                        </p>
+                      ) : (
+                        <div className="max-h-56 overflow-y-auto rounded-lg border border-white/10 bg-neutral-950 p-2 font-mono text-[10px] leading-relaxed">
+                          {log.map((l) => (
+                            <div key={l.id} className="flex gap-2">
+                              <span className="shrink-0 text-neutral-600">{clock(l.at)}</span>
+                              <span
+                                className={
+                                  l.kind === "error"
+                                    ? "shrink-0 text-red-400/80"
+                                    : l.kind === "status"
+                                      ? "shrink-0 text-emerald-400/80"
+                                      : "shrink-0 text-neutral-500"
+                                }
+                              >
+                                {l.kind}
+                              </span>
+                              <span className="break-all text-neutral-400">{l.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1062,7 +1175,8 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
           >
             <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
               <iframe
-                src={overlayPath}
+                ref={(el) => setPreview((el as HTMLIFrameElement | null)?.contentWindow ?? null)}
+                src={`${overlayPath}?edit=1`}
                 title="Overlay preview"
                 className="origin-top-left border-0"
                 style={{ width: w, height: h, transform: `scale(${scale})` }}

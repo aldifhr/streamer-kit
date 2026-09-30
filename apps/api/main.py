@@ -8,6 +8,7 @@ does not mean editing the file that owns routing.
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -31,6 +32,22 @@ from sources import TikTokSource
 # version mirrored the full schema here and silently overrode the frontend
 # defaults with stale values.
 DEFAULT_OVERLAY_CONFIG: dict[str, Any] = {"theme": "streamline"}
+
+# Without this, Python's default level is WARNING and every log.info in the
+# event path is discarded — the log would look like it was working while saying
+# nothing. A handler is configured rather than relying on "last resort", so the
+# format is ours and uvicorn's own access log is not reformatted out from under
+# anyone reading `journalctl -u streamer-api`.
+#
+# STREAMKIT_LOG_LEVEL=NONE silences it entirely for a streamer who does not want
+# a chatty journal on a busy room.
+_LEVEL = os.environ.get("STREAMKIT_LOG_LEVEL", "INFO").upper()
+if _LEVEL != "NONE":
+    logging.basicConfig(
+        level=getattr(logging, _LEVEL, logging.INFO),
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 # --------------------------------------------------------------------------

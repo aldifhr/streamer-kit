@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 from hub import hub
 
+import eventlog
+
 COMMENT = "comment"
 LIKE = "like"
 GIFT = "gift"
@@ -132,10 +134,23 @@ def to_wire(event: Event) -> dict[str, Any]:
 
 
 async def emit(overlay_id: str, event: Event) -> None:
+    # Logged here rather than in each source, so every producer is covered by one
+    # line of code: TikTok, the manual trigger and any future source all pass
+    # through emit, and a source that forgot to log would be invisible if the call
+    # sat in the source instead.
+    #
+    # Outside the broadcast on purpose. The log has to keep working when every
+    # client has gone — a quiet log is exactly when it is needed.
+    eventlog.record(event.kind, user=event.user, text=event.value, meta=event.meta)
     await hub.broadcast(to_wire(event), overlay_id=overlay_id)
 
 
 async def emit_status(overlay_id: str, *, connected: bool, message: str, connecting: bool = False) -> None:
+    # A snapshot sent at the start of a session is connecting=True, not a state
+    # change, and treating it as a disconnect would reset the counters before
+    # there is anything to count.
+    if not connecting and eventlog.is_connected() != connected:
+        eventlog.set_connected(connected, message)
     payload: dict[str, Any] = {"type": "status", "connected": connected, "message": message}
     if connecting:
         payload["connecting"] = True
@@ -143,6 +158,7 @@ async def emit_status(overlay_id: str, *, connected: bool, message: str, connect
 
 
 async def emit_error(overlay_id: str, message: str) -> None:
+    eventlog.error(message)
     await hub.broadcast({"type": "error", "message": message}, overlay_id=overlay_id)
 
 

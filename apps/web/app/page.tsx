@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { HeroPreviews } from "@/lib/landing/HeroPreviews";
-import { ThemeSwatch } from "@/lib/editor/ThemeSwatch";
 import { WidgetGrid } from "@/lib/landing/WidgetGrid";
+import { WidgetPreviewGrid } from "@/lib/widgets/WidgetPreview";
 
-import { THEMES } from "@/lib/scene";
 import { WIDGET_LIST } from "@/lib/widgets/registry";
 
 const STEPS = [
@@ -156,34 +155,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Themes — the real list, rendered by the real swatch */}
-        <section id="themes" className="scroll-mt-20 border-t border-white/10 px-6 py-24">
-          <div className="mx-auto max-w-6xl">
-            <div className="max-w-2xl">
-              <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">Themes, then make it yours</h2>
-              <p className="mt-4 text-neutral-500">
-                A theme sets the shared typography and the chat card — the two things every overlay
-                would otherwise have to be styled by hand. Every widget keeps its own controls on top
-                of it. Or skip it and write CSS against the same custom properties.
-              </p>
-            </div>
-
-            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {THEMES.map((t) => (
-                <div
-                  key={t.id}
-                  className="overflow-hidden rounded-2xl border border-white/10 transition hover:border-white/30"
-                >
-                  <ThemeSwatch theme={t} />
-                  <div className="flex items-center justify-between bg-neutral-950 px-4 py-3">
-                    <h3 className="text-sm font-semibold">{t.name}</h3>
-                    <span className="text-[10px] text-neutral-600">{t.id}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
+        {/* The grid lives past the client boundary; see lib/widgets/WidgetPreview.tsx for why. */}
+        <WidgetPreviewGrid />
 
         {/* Steps */}
         <section className="border-t border-white/10 px-6 py-24">

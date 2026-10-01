@@ -252,12 +252,20 @@ cd apps/api
 .venv/bin/python test_store.py       # atomic replace, lock, recovery
 .venv/bin/python test_api.py         # route + auth
 STREAMKIT_TOKEN=x TEST_TOKEN=x .venv/bin/python test_polls.py   # poll + vote
+.venv/bin/python test_eventlog.py    # format + sanitasi log event
+.venv/bin/python test_overlay_connect.py   # connect ter-scope, tidak bisa dialihkan
 
 # frontend — dari repo root
 npm run typecheck                    # tsc --noEmit
 npm run test:registry                # setiap widget punya id unik & defaults
+npm run test:align                   # widget dianchor ke sudut
+npm run test:scene                   # scene config
 npm run test:astro                   # roster astronaut
-npm run build && node apps/web/tests/api-gate.cjs   # gerbang auth (butuh build)
+npm run test:astro-consume           # urutan seq, tanpa replay XP
+npm run test:astro-three             # fallback 3D -> 2D
+npm run test:middleware              # gerbang auth
+npm run test:socketlog               # ring buffer frame
+npm run build && node apps/web/tests/api-gate.cjs   # gerbang auth end-to-end (butuh build)
 ```
 
 `test:astro` dan `test:registry` meng-compile engine-nya sendiri lewat tsconfig
@@ -268,8 +276,15 @@ up to date. Tiap suite mengambil port bebas dari OS, dan teardown-nya kill proce
 group lalu menyapu berdasarkan port — bukan port tetap, karena server dari run
 sebelumnya akan menjawab dan test-nya diam-diam menguji build yang salah.
 
-`test_api.py` dijalankan dengan `STREAMKIT_TOKEN` **tidak** ter-set; dengan token
-aktif ia menolak create-nya sendiri.
+`test_api.py` mengatur `STREAMKIT_TOKEN`-nya sendiri ke nilai yang diketahuinya
+lalu menguji guard terhadap nilai itu, jadi ia tidak butuh env dari luar. Ia
+pernah gagal diam-diam di arah lain: ketika backend mulai menolak write
+anonim, pemanggilan tanpa header membalas 401, baris yang membaca
+`["overlay"]` dari body itu mati dengan `KeyError`, dan seluruh assertion
+setelahnya dilewati karena alasan yang tidak ada hubungannya dengan apa yang
+seharusnya diuji. Dua assertion sekarang mengunci bentuk itu — header bersama
+harus diterima, dan write tanpa header harus ditolak — jadi suite yang kehilangan
+header-nya tidak bisa terlihat seperti masih lulus.
 
 ## Catatan
 

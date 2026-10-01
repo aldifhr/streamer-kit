@@ -61,9 +61,25 @@ def check(label: str, cond: bool, detail: str = "") -> None:
         failures.append(label)
 
 
+# Every write goes through the token check. The suite used to call these
+# anonymously, which stopped being honest the moment the backend started
+# refusing them: the first assertion died on a 401 rather than on the shape it
+# was written to check, and everything after it was skipped for the wrong reason.
+# A write that forgets the header fails closed, so a suite whose own calls lost
+# it would start asserting against 401s and pass nothing real. Built on each use
+# rather than once at import, because the auth block below sets the env var after
+# this module is already loaded — a value captured up top would still hold
+# whatever the environment happened to say before that.
+def auth():
+    return {"x-streamkit-token": os.environ.get("STREAMKIT_TOKEN", "s3cret")}
+
+
+AUTH = auth()
+
+
 with TestClient(main.app) as client:
     print("crud")
-    created = client.post("/api/overlays", json={"name": "Test scene"}).json()["overlay"]
+    created = client.post("/api/overlays", json={"name": "Test scene"}, headers=AUTH).json()["overlay"]
     oid = created["id"]
     check("create returns id+name", bool(oid) and created["name"] == "Test scene")
     check("create defaults theme", created["theme"] == "streamline", created["theme"])
@@ -84,24 +100,24 @@ with TestClient(main.app) as client:
         "global": {"fontSize": 16},
         "widgets": [{"id": "chat-1", "type": "chat", "enabled": True, "x": 0, "y": 1, "scale": 1, "style": {}}],
     }
-    tpl = client.post("/api/overlays", json={"name": "From template", "config": scene}).json()["overlay"]
+    tpl = client.post("/api/overlays", json={"name": "From template", "config": scene}, headers=AUTH).json()["overlay"]
     check("template config stored verbatim", tpl["config"] == scene, json.dumps(tpl["config"]))
     check("template theme projected", tpl["theme"] == "cards", tpl["theme"])
     listed = {o["id"]: o for o in client.get("/api/overlays").json()["overlays"]}
     check("template widgets visible in list",
           listed[tpl["id"]]["config"]["widgets"][0]["type"] == "chat")
-    client.delete(f"/api/overlays/{tpl['id']}")
+    client.delete(f"/api/overlays/{tpl['id']}", headers=AUTH)
 
     print("username")
-    patched = client.patch(f"/api/overlays/{oid}", json={"username": "@someone"}).json()["overlay"]
+    patched = client.patch(f"/api/overlays/{oid}", json={"username": "@someone"}, headers=AUTH).json()["overlay"]
     check("username strips @", patched["username"] == "someone", patched["username"])
     check("patch keeps config", client.get(f"/api/overlays/{oid}").json()["config"]["theme"] == "streamline")
 
     print("config")
     cfg = {"theme": "quiet", "widgets": [{"id": "a", "type": "chat"}]}
-    check("config save", client.post(f"/api/overlays/{oid}/config", json={"config": cfg}).status_code == 200)
+    check("config save", client.post(f"/api/overlays/{oid}/config", json={"config": cfg}, headers=AUTH).status_code == 200)
     check("config persisted", client.get(f"/api/overlays/{oid}").json()["config"] == cfg)
-    check("config on missing is 404", client.post("/api/overlays/nope/config", json={"config": cfg}).status_code == 404)
+    check("config on missing is 404", client.post("/api/overlays/nope/config", json={"config": cfg}, headers=AUTH).status_code == 404)
 
     print("websocket attach")
     with client.websocket_connect(f"/ws/overlay/{oid}") as ws:
@@ -111,32 +127,32 @@ with TestClient(main.app) as client:
         check("status snapshot on attach", second["type"] == "status" and second["connected"] is False, str(second))
 
         print("trigger -> pushed to the socket")
-        client.post(f"/api/overlays/{oid}/trigger", json={"kind": ALERT, "title": "Hi", "text": "there"})
+        client.post(f"/api/overlays/{oid}/trigger", json={"kind": ALERT, "title": "Hi", "text": "there"}, headers=AUTH)
         pushed = ws.receive_json()
         check("alert reached socket", pushed["type"] == ALERT and pushed["title"] == "Hi", str(pushed))
 
         print("trigger with a stable user key")
-        client.post(f"/api/overlays/{oid}/trigger", json={"kind": "follow", "user": "kei", "user_id": "kei_tiktok"})
+        client.post(f"/api/overlays/{oid}/trigger", json={"kind": "follow", "user": "kei", "user_id": "kei_tiktok"}, headers=AUTH)
         keyed = ws.receive_json()
         check("userId carried through", keyed["userId"] == "kei_tiktok", str(keyed))
 
         print("customizer clients also see config updates")
-        client.post(f"/api/overlays/{oid}/config", json={"config": {"theme": "rail"}})
+        client.post(f"/api/overlays/{oid}/config", json={"config": {"theme": "rail"}}, headers=AUTH)
         pushed_cfg = ws.receive_json()
         check("config broadcast", pushed_cfg["type"] == "config" and pushed_cfg["config"]["theme"] == "rail", str(pushed_cfg))
 
     print("triggers")
-    check("trigger on missing is 404", client.post("/api/overlays/nope/trigger", json={}).status_code == 404)
-    r = client.post(f"/api/hooks/{oid}", json={"user": "donor", "text": "Rp50k", "amount": 50000})
+    check("trigger on missing is 404", client.post("/api/overlays/nope/trigger", json={}, headers=AUTH).status_code == 404)
+    r = client.post(f"/api/hooks/{oid}", json={"user": "donor", "text": "Rp50k", "amount": 50000}, headers=AUTH)
     check("webhook accepted", r.status_code == 200, r.text)
 
     print("connect validation")
-    check("blank username is 400", client.post("/api/connect", json={"username": "  "}).status_code == 400)
-    check("disconnect is idempotent", client.post("/api/disconnect", json={"overlay_id": oid}).status_code == 200)
+    check("blank username is 400", client.post("/api/connect", json={"username": "  "}, headers=AUTH).status_code == 400)
+    check("disconnect is idempotent", client.post("/api/disconnect", json={"overlay_id": oid}, headers=AUTH).status_code == 200)
 
     print("delete")
-    check("delete ok", client.delete(f"/api/overlays/{oid}").json()["status"] == "ok")
-    check("delete twice is 404", client.delete(f"/api/overlays/{oid}").status_code == 404)
+    check("delete ok", client.delete(f"/api/overlays/{oid}", headers=AUTH).json()["status"] == "ok")
+    check("delete twice is 404", client.delete(f"/api/overlays/{oid}", headers=AUTH).status_code == 404)
 
 print("wire format")
 check("comment wire unchanged", to_wire(Event(kind="comment", user="a", value="hi")) == {"type": "comment", "user": "a", "userId": "a", "text": "hi"})
@@ -187,6 +203,14 @@ try:
         good = {"x-streamkit-token": "s3cret"}
         made = guarded.post("/api/overlays", json={"name": "Guarded"}, headers=good)
         check("create with the right token works", made.status_code == 200, made.text)
+
+        # A write that forgets the header fails closed, so a suite whose own
+        # calls lost it would start asserting against 401s and pass nothing real.
+        # Pinning the shared header keeps that from looking like progress.
+        check("the shared write header is the one the guard accepts",
+              client.post("/api/overlays", json={"name": "Headered"}, headers=auth()).status_code == 200)
+        check("a write with no header at all is refused",
+              client.post("/api/overlays", json={"name": "Anonymous"}).status_code == 401)
         if made.status_code == 200:
             gid = made.json()["overlay"]["id"]
             # Checked before the delete, since a 404 here would mean the guard is

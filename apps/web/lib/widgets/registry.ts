@@ -9,6 +9,7 @@
 import { alertsWidget } from "./alerts";
 import { astroWidget } from "./astro/widget";
 import { chatWidget } from "./chat";
+import { cityWidget } from "./city/widget";
 import { donationJarWidget } from "./donationjar";
 import { goalWidget } from "./goal";
 import { marathonWidget } from "./marathon";
@@ -28,6 +29,7 @@ export const WIDGET_TYPES: Record<string, WidgetType> = {
   goal: goalWidget,
   text: textWidget,
   astro: astroWidget,
+  city: cityWidget,
   streaks: streaksWidget,
   "top-gifts": topGiftsWidget,
   marathon: marathonWidget,
@@ -42,6 +44,7 @@ export const WIDGET_LIST: WidgetType[] = [
   chatWidget,
   alertsWidget,
   astroWidget,
+  cityWidget,
   viewersWidget,
   goalWidget,
   textWidget,

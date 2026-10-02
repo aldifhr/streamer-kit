@@ -107,6 +107,17 @@ export interface AstroEngine {
    * viewer sees as motion that never quite arrives.
    */
   timeAccount: () => { simulated: number; wall: number };
+  /**
+   * The oldest astronaut's current draw alpha, and a way to start its exit.
+   *
+   * Both exist so the fade can be measured rather than assumed. A test that
+   * only checks the transition eventually finishes passes against a curve that
+   * holds solid for most of its length and then blinks out in the last frame,
+   * because the end state is identical either way. Sampling the alpha across
+   * the transition is the only way to see the shape.
+   */
+  alphaNow: () => number;
+  beginLeave: () => void;
   /** The oldest astronaut's position, to assert a stall does not teleport it. */
   astroPosition: () => { x: number; y: number };
   reset: () => void;
@@ -570,7 +581,6 @@ export function createAstroEngine(opts: {
   const FADE_OUT = 520;
 
   const easeOut = (t: number) => 1 - (1 - t) * (1 - t);
-  const easeIn = (t: number) => t * t;
 
   /**
    * Start an astronaut on its way off screen.
@@ -587,10 +597,21 @@ export function createAstroEngine(opts: {
     a.leaveAt = now;
   }
 
-  /** What an astronaut is drawn at, after every transition in the scene. */
+  /**
+   * What an astronaut is drawn at, after every transition in the scene.
+   *
+   * Both directions ease out. Easing the exit in was the bug: `easeIn` keeps the
+   * alpha near full opacity for most of the transition and then collapses it at
+   * the very end, so an astronaut leaving spent nearly its whole exit invisible
+   * and then vanished in a single frame. Combined with the early return below,
+   * that read as a blink — the sprite was there, then was not. An exit should
+   * leave quickly and finish cleanly, which is what easing out means here: most
+   * of the fade happens early, and the last stretch is the slow part where the
+   * viewer actually sees the astronaut go.
+   */
   function alphaFor(a: Astro): number {
     const inF = easeOut(clamp(a.fade, 0, 1));
-    const outF = a.leaving ? 1 - easeIn(clamp(a.leave, 0, 1)) : 1;
+    const outF = a.leaving ? 1 - easeOut(clamp(a.leave, 0, 1)) : 1;
     const asleep = 1 - a.sleepMix * 0.35;
     return clamp(inF * outF * asleep, 0, 1);
   }
@@ -977,7 +998,10 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     const oy = R(a.y) - 8 + R(Math.sin(a.t * 1.5 + a.ph)) + R(hop);
 
     const alpha = alphaFor(a);
-    if (alpha <= 0.02) return;
+    // Hold the final sliver rather than dropping the sprite: at a few
+    // percent over a dark sky the difference is one pixel of brightness, but
+    // skipping the draw entirely makes the astronaut blink out between frames.
+    if (alpha <= 0.004) return;
     if (alpha < 1) ctx!.globalAlpha = alpha;
     drawParts(astroParts(a, wf, leg, wav), ox, oy, k);
     ctx!.globalAlpha = 1;
@@ -987,7 +1011,10 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     // With their owner: a drone left at full opacity over a dissolving alien
     // reads as a bug rather than as the same thing fading.
     const alpha = alphaFor(a);
-    if (alpha <= 0.02) return;
+    // Hold the final sliver rather than dropping the sprite: at a few
+    // percent over a dark sky the difference is one pixel of brightness, but
+    // skipping the draw entirely makes the astronaut blink out between frames.
+    if (alpha <= 0.004) return;
     if (alpha < 1) ctx!.globalAlpha = alpha;
     a.drones.forEach((d) => {
       const on = Math.floor(now / 350) % 2;
@@ -1009,7 +1036,10 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     // Fades with the astronaut, so a name plate does not hang in the air for the
     // half second its owner is still dissolving.
     const alpha = alphaFor(a);
-    if (alpha <= 0.02) return;
+    // Hold the final sliver rather than dropping the sprite: at a few
+    // percent over a dark sky the difference is one pixel of brightness, but
+    // skipping the draw entirely makes the astronaut blink out between frames.
+    if (alpha <= 0.004) return;
     if (alpha < 1) ctx!.globalAlpha = alpha;
     if (showLabel) {
       const nm = sanitize(a.name).slice(0, 10) || "VIEWER";
@@ -1778,6 +1808,14 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     },
     timeAccount() {
       return { simulated: simulatedSeconds, wall: (performance.now() - startedAt) / 1000 };
+    },
+    alphaNow() {
+      const first = astros.values().next();
+      return first.done || !first.value ? 0 : alphaFor(first.value);
+    },
+    beginLeave() {
+      const first = astros.values().next();
+      if (!first.done && first.value) startLeaving(first.value, performance.now());
     },
     astroPosition() {
       const first = astros.values().next();

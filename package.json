@@ -21,7 +21,9 @@
     "test:astro-three": "tsc -p apps/web/tests/tsconfig.three.json && node apps/web/tests/astro-three.cjs",
     "test:astro-caps": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-caps.cjs",
     "test:preview-fetch": "node apps/web/tests/preview-fetch.cjs",
-    "test:astro-motion": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-motion.cjs"
+    "test:astro-motion": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-motion.cjs",
+    "test:astro-fade": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-fade.cjs",
+    "test:city": "tsc -p apps/web/tests/tsconfig.city.json && node apps/web/tests/city-engine.cjs"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",

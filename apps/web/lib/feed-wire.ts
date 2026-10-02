@@ -57,6 +57,18 @@ export const FROM_WIRE: Record<
     meta: { diamonds: d.value },
   }),
   join: (d) => ({ kind: "join", user: String(d.user), userId: id(d), value: "", meta: { viewers: d.viewers } }),
+  // The room's own size, sent on every heartbeat. This entry has existed in the
+  // `EventKind` union since the beginning and had no mapping behind it, so the
+  // feed's `if (!build) return;` dropped every frame of it on the floor — which
+  // is why a full room rendered as an empty village: nothing downstream was ever
+  // wrong, the number simply never arrived.
+  viewers: (d) => ({
+    kind: "viewers",
+    user: "",
+    userId: "",
+    value: "",
+    meta: { count: countMetaValue(d.count ?? d.total_user ?? d.viewers) },
+  }),
   follow: (d) => ({ kind: "follow", user: String(d.user), userId: id(d), value: "", meta: {} }),
   share: (d) => ({ kind: "share", user: String(d.user), userId: id(d), value: d.count ? `+${d.count}` : "", meta: {} }),
   alert: (d) => ({
@@ -87,6 +99,12 @@ export const FROM_WIRE: Record<
  * event counts by asking whether the amount is positive, and an alert with no
  * amount is an ordinary editor test that must not tip the pot.
  */
+/** A non-negative whole number from a field that may be absent or a string. */
+const countMetaValue = (raw: unknown): number => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+};
+
 /** How many likes a run stands for, when the wire said a usable number. */
 const countMeta = (raw: unknown): { count?: number } => {
   const n = Number(raw);

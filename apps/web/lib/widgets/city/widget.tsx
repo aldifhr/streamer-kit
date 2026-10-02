@@ -107,7 +107,11 @@ export const cityWidget: WidgetType = {
   // go home on the `leave-after` idle timer, and an explicit exit is not needed
   // for a re-render to be safe. `join` is in so someone can walk in before they
   // say anything.
-  kinds: ["comment", "like", "follow", "share", "gift", "join"],
+  // `viewers` is what sizes the city. Left out of this list the scene never
+  // receives a single audience update, which is not a degraded city — it is a
+  // permanent "KAMPUNG 0" no matter how full the room is, because the entry is
+  // filtered out before the engine is handed it.
+  kinds: ["viewers", "comment", "like", "follow", "share", "gift", "join"],
   groups: [
     {
       title: "Roster",

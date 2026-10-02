@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bool, num, str } from "./style";
+import { takeNew } from "./astro/consume";
 import type { Entry, WidgetProps, WidgetType } from "./types";
 
 /**
@@ -102,11 +103,19 @@ function DonationJar({ style, entries, sceneId }: WidgetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneId]);
 
+  // The marker is the highest sequence handled, and `takeNew` is what advances
+  // it correctly. This used to read `entries[entries.length - 1].seq`, which is
+  // the *oldest* entry retained, because the feed prepends: the marker trailed
+  // behind everything already counted, so the next render counted it all again.
+  // With no dependency array the effect ran on every render, so the total grew
+  // without a single new event and the recent list filled with repeats. A total
+  // that climbs on its own is worse than one that does not move, because it
+  // still looks like progress.
   useEffect(() => {
     if (!loaded.current) return;
-    const fresh = entries.filter((e) => e.seq > lastSeq.current);
-    if (!fresh.length) return;
-    lastSeq.current = entries[entries.length - 1].seq;
+    const { fresh, consumed } = takeNew(entries, lastSeq.current);
+    if (fresh.length === 0) return;
+    lastSeq.current = consumed;
 
     const added: { user: string; amount: number }[] = [];
     for (const e of fresh) {
@@ -134,7 +143,9 @@ function DonationJar({ style, entries, sceneId }: WidgetProps) {
     setRecent((prev) => [...added, ...prev].slice(0, 3));
     setPulse(true);
     setTimeout(() => setPulse(false), 900);
-  });
+    // Keyed on the buffer rather than on every render, so the arithmetic happens
+    // once per batch of events and never on a re-render that brought none.
+  }, [entries]);
 
   const pct = Math.max(0, Math.min(100, (earned / target) * 100));
   const done = earned >= target;

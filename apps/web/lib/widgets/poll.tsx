@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { bool, num, str } from "./style";
+import { votedState } from "./poll-vote";
 import { apiFetch } from "@/lib/api";
 import type { WidgetProps, WidgetType } from "./types";
 
@@ -29,8 +30,17 @@ interface Poll {
   question: string;
   options: Option[];
   closed: boolean;
-  /** null until the local vote is recorded, so the bar is not re-shown twice. */
-  mine: string | null;
+  /**
+   * Which option this browser chose, if the backend ever tells us.
+   *
+   * It does not. `_shape()` in `apps/api/polls.py` returns id, question,
+   * options, closed and updatedAt, and nothing else, so this arrives undefined
+   * rather than null. Testing `poll.mine !== null` against undefined is true —
+   * which meant the buttons were disabled from the first paint and nobody could
+   * vote at all. Kept optional and normalised at the point of use so a field the
+   * server does not send cannot decide the widget.
+   */
+  mine?: string | null;
 }
 
 function Polls({ style, overlayId, preview }: WidgetProps) {
@@ -39,9 +49,21 @@ function Polls({ style, overlayId, preview }: WidgetProps) {
   const [poll, setPoll] = useState<Poll | null>(null);
   const [busy, setBusy] = useState(false);
   const loaded = useRef(false);
+  /**
+   * What this browser picked, and whether it has picked at all.
+   *
+   * The one-vote-per-viewer rule has nowhere server-side to live: a vote is a
+   * GET carrying the choice, because a POST would close the overlay to OBS,
+   * which cannot present a session. So "has this viewer voted" is answered here,
+   * per browser. That stops the buttons being offered a second time, and it is
+   * honestly only that — clearing the storage or opening another tab votes
+   * again. Closing that properly needs an identity the overlay can carry.
+   */
+  const [choice, setChoice] = useState<string | null>(null);
 
   useEffect(() => {
     setPoll(null);
+    setChoice(null);
     loaded.current = true;
     // A sample on the landing page has no overlay behind it, so the id it was
     // handed is a placeholder that resolves to nothing. Asking anyway produces a
@@ -63,16 +85,19 @@ function Polls({ style, overlayId, preview }: WidgetProps) {
   }
 
   async function vote(index: number) {
-    // One vote per poll, enforced by disabling the buttons rather than by
-    // refusing server-side: a stray second click is not worth a round trip and
-    // the local state is what the viewer sees anyway.
-    if (!poll || poll.mine !== null || busy) return;
+    // One vote per poll per browser, enforced by disabling the buttons rather
+    // than by refusing server-side: a stray second click is not worth a round
+    // trip, and the local state is what the viewer sees anyway.
+    if (!poll || choice !== null || busy) return;
     setBusy(true);
     try {
       const res = await apiFetch(`/api/polls/${overlayId}/vote?choice=${index}`);
       if (res.ok) {
         const body = (await res.json()) as Poll;
         setPoll(body);
+        // Recorded only once the vote actually landed, so a failed request does
+        // not lock the buttons for the rest of the poll.
+        setChoice(String(index));
       }
     } catch {
       /* the choice is not worth an error state on a stream */
@@ -93,7 +118,9 @@ function Polls({ style, overlayId, preview }: WidgetProps) {
   if (!poll || !poll.options?.length) return null;
 
   const totalVotes = poll.options.reduce((sum, o) => sum + (o.votes || 0), 0);
-  const reveal = showResults && (poll.closed || poll.mine !== null);
+  // One place decides whether this browser has voted, because the three places
+  // that used to decide it separately disagreed as soon as `mine` was undefined.
+  const { voted, reveal, chosenIndex } = votedState(poll, choice, showResults);
 
   return (
     <div className="sk-poll">
@@ -101,13 +128,13 @@ function Polls({ style, overlayId, preview }: WidgetProps) {
       <div className="sk-poll-options">
         {poll.options.map((o, i) => {
           const pct = totalVotes > 0 ? Math.round(((o.votes || 0) / totalVotes) * 100) : 0;
-          const chosen = poll.mine === String(i) || poll.mine === String(o.label);
+          const chosen = chosenIndex === i;
           return (
             <button
               type="button"
               key={`${o.label}-${i}`}
               className={`sk-poll-option${chosen ? " is-chosen" : ""}`}
-              disabled={poll.mine !== null || busy}
+              disabled={voted || busy}
               onClick={() => void vote(i)}
             >
               {showBar && reveal ? (

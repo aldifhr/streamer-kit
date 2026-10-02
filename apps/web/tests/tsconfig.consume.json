@@ -20,6 +20,7 @@
     }
   },
   "files": [
-    "../lib/widgets/astro/consume.ts"
+    "../lib/widgets/astro/consume.ts",
+    "../lib/widgets/poll-vote.ts"
   ]
 }

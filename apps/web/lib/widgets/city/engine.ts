@@ -45,21 +45,23 @@ import {
   txtOn,
   txtOutlineOn,
 } from "./scenery";
+import { textW } from "./sprites";
 import type { CityLayout, Ctx, Door, ShopOwners, Sprite } from "./scenery";
 import { NO_COS, cosFor, decorate, isCos } from "./cosmetics";
 import type { Cos } from "./cosmetics";
 import { buildLocal, pickLocalType, speedFor, trailsConfetti } from "./local";
-import { createShops, SHOP_SLOTS } from "./shops";
+import { createShops, SHOP_MIN, SHOP_SLOTS } from "./shops";
 import { createActivities } from "./activities";
 import type { Spot } from "./activities";
 import { createStaging, stagedKindFor } from "./staging";
 import { createWeather, drawPuddles, drawRain, drawRainWash, drawRainbow } from "./weather";
 import { createMissions } from "./missions";
 import type { MissionGoal } from "./missions";
-import { createMayor, ESCORT } from "./mayor";
+import { createMayor, ESCORT, MIN_DIAMONDS as MAYOR_MIN } from "./mayor";
 import { drawDecorations } from "./decor";
 import type { Weather } from "./weather";
-import { audienceGrowth, audienceTier, easeAudience, formatAudience } from "./audience";
+import { AUDIENCE_TIERS, audienceGrowth, audienceTier, easeAudience, formatAudience } from "./audience";
+import { createInspector } from "./inspector";
 
 interface Resident {
   id: string;
@@ -533,6 +535,16 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * a moment worth building for.
    */
   let bakedTier = -1;
+  /**
+   * What the city decided and why.
+   *
+   * Written at the decision, not at the event, because the question this answers
+   * is "why is the number not moving" — and the answer is never in the event
+   * itself. A join that is refused because the street is full, a resident that
+   * goes home for going quiet rather than for leaving, an audience that arrives
+   * and crosses a threshold: those are the lines that explain it.
+   */
+  const inspector = createInspector();
   function rebakeCity(owners: ShopOwners) {
     if (!ready) return;
     rebakeCount += 1;
@@ -686,8 +698,21 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       if (!oldest) {
         // Everything left is already leaving, so the roster is draining. Let
         // this one in rather than refusing the first person to arrive.
+        inspector.push(
+          "refused",
+          `${nick} tetap masuk — semua warga sedang keluar, jalan sedang kosong`,
+          performance.now(),
+        );
         break;
       }
+      // The single most useful line in this log. A room can be full of new
+      // arrivals and the number still will not move, and the reason is that
+      // every arrival pushes somebody out. Nothing on screen says that.
+      inspector.push(
+        "refused",
+        `${nick} masuk, ${oldest.name} dikeluarkan — jalan penuh ${config.maxPeople}`,
+        performance.now(),
+      );
       people.delete(oldest.id);
     }
     // Whatever is in storage was written by an older build, or by hand, so it is
@@ -885,7 +910,13 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     updateEscort(p);
     updateActivity(p, dt, now);
 
-    if ((p.state === "walk" || p.state === "idle") && now - p.lastActive > config.leaveAfterMs) startExit(p);
+    if ((p.state === "walk" || p.state === "idle") && now - p.lastActive > config.leaveAfterMs) {
+      // Said out loud because "they left" is a guess: nobody told us they left.
+      // They went quiet. Saying so is the difference between a log that explains
+      // the city and one that invents a reason.
+      inspector.push("leave", `${p.name} pulang — diam ${Math.round(config.leaveAfterMs / 1000)}s`, now);
+      startExit(p);
+    }
 
     // Step around each other. Cheap, and it stops the crowd stacking into one
     // column on a busy chat.
@@ -1347,13 +1378,27 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     // idle timers: this is the only number here that cannot drift from reality.
     if (entry.kind === "viewers") {
       const n = Number(entry.meta?.count ?? entry.value);
-      if (Number.isFinite(n) && n >= 0) audienceReal = Math.round(n);
+      if (Number.isFinite(n) && n >= 0) {
+        const before = audienceReal;
+        audienceReal = Math.round(n);
+        // Only the changes. A heartbeat every second would drown everything else.
+        if (before !== audienceReal) {
+          inspector.push("audience", `penonton ${before} → ${audienceReal}`, now);
+        }
+      } else {
+        inspector.push("audience", `penonton tidak terbaca: ${String(entry.meta?.count ?? entry.value)}`, now);
+      }
       return;
     }
 
     const isNew = !people.has(id);
     const p = ensurePerson(id, nick);
     if (isNew) addToast(`${nick} MASUK KOTA`, "#7dff9a");
+    inspector.push(
+      isNew ? "join" : "event",
+      isNew ? `${nick} masuk (warga ${people.size}/${config.maxPeople})` : `${nick} aktif lagi`,
+      now,
+    );
     if (entry.kind === "join") return;
     p.lastActive = now;
 
@@ -1413,9 +1458,17 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
           // Worth more than one tick of the board, and worth a car if it is
           // enough of it.
           missions.credit("gifts", Math.max(1, Math.round(d / 100)));
-          mayor.donate(p.id, p.name, d);
+          inspector.push(
+          d >= MAYOR_MIN ? "mayor" : "gift",
+          `${p.name} gift ${Math.round(d)} diamond${d >= MAYOR_MIN ? " — jadi walikota" : ""}`,
+          now,
+        );
+        mayor.donate(p.id, p.name, d);
           savePerson(p);
-          shops.donate(p.id, p.name, d);
+          if (d >= SHOP_MIN) {
+          inspector.push("gift", `${p.name} punya toko — papan namanya tampil selama jadi rank 1`, now);
+        }
+        shops.donate(p.id, p.name, d);
         }
 
         const label = clean(String(entry.meta.giftName ?? entry.value ?? "gift"));
@@ -1468,7 +1521,19 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     // lamp count all differ per tier, and none of them can be adjusted in place
     // because they are baked. Crossing one is rare, so the cost is irrelevant.
     const tier = audienceTier(audienceShown).index;
-    if (ready && tier !== bakedTier) layoutFor(W || canvas.clientWidth || 0, H || canvas.clientHeight || 0);
+    if (ready && tier !== bakedTier) {
+      const from = AUDIENCE_TIERS[bakedTier]?.name ?? "—";
+      const to = AUDIENCE_TIERS[tier].name;
+      const next = AUDIENCE_TIERS[tier + 1];
+      inspector.push(
+        "tier",
+        next
+          ? `${from} → ${to}  (tingkat berikutnya di ${next.from} penonton)`
+          : `${from} → ${to}  (tingkat tertinggi)`,
+        performance.now(),
+      );
+      layoutFor(W || canvas.clientWidth || 0, H || canvas.clientHeight || 0);
+    }
     missions.update();
     syncMayorCar(now);
     if (escortRetryIn > 0) {
@@ -2063,6 +2128,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     plateOn(g, 3, 3, head.length * 4 - 1 + 6, 11, PLATE);
     txtOn(g, head, 6, 6, "#ffffff");
 
+    if (config.debug) drawDebugLog(g);
+
     const name = sanitize(config.cityName).slice(0, 24);
     if (name) {
       const w = name.length * 4 - 1;
@@ -2144,6 +2211,44 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     glowCache.clear();
     ready = true;
   }
+
+  /**
+   * The decision log, drawn down the side of the scene.
+   *
+   * Kept on the canvas rather than exported to a panel because the engine only
+   * exists here — the dashboard has its own socket and never holds this object.
+   * Piping debug text over the wire would put it on the stream; drawing it under
+   * a flag keeps it in the place where it can honestly be true.
+   */
+  function drawDebugLog(g: Ctx) {
+    const notes = inspector.notes();
+    if (!notes.length) return;
+    const lines = notes.slice(-16);
+    const x = LW - 3;
+    let y = R(LH * 0.06);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const n = lines[i];
+      const label = `${n.kind}  ${n.text}`.slice(0, 46);
+      const w = textW(label) + 4;
+      plateOn(g, x - w, y - 2, w, 11, "rgba(8,8,28,.86)");
+      txtOn(g, label, x - w + 2, y, KIND_INK[n.kind] ?? "#d8d8e8");
+      y += 12;
+      if (y > R(LH * 0.7)) break;
+    }
+  }
+
+  const KIND_INK: Record<string, string> = {
+    audience: "#7dd3fc",
+    tier: "#ffd95d",
+    join: "#7dff9a",
+    leave: "#9ca3af",
+    refused: "#ff9f6b",
+    gift: "#ff8fb1",
+    mayor: "#c4a7ff",
+    mission: "#ffd95d",
+    weather: "#9ad5ff",
+    event: "#d8d8e8",
+  };
 
   const FRAME_BUDGET = 1000 / 60;
   let carry = 0;
@@ -2303,6 +2408,9 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         // TikTok reports, the other is what the city has eased toward.
         audience: audienceShown,
         audienceReal,
+        // The decision log, for "why is the number not moving".
+        notes: inspector.notes(),
+        tally: inspector.tally(),
         // Which tier the street was actually laid out for, and what came out of
         // it. The HUD reports the tier from the audience while this reports the
         // one that was baked, and the gap between those two is what a "it says

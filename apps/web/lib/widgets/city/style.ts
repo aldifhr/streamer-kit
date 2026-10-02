@@ -61,6 +61,10 @@ export function toConfig(style: Record<string, string | number | boolean | undef
     pixelSize: n("pixel-size", 0),
     transparent: b("transparent", false),
     showHud: b("show-hud", true),
+    // Off unless asked for: this one draws text down the side of the overlay, and
+    // an overlay that quietly grew a debug panel would be showing it to every
+    // viewer on the stream.
+    debug: b("debug", false),
     showLabels: b("show-labels", true),
     cityName: String(style["city-name"] ?? ""),
     partyGift: n("party-gift", 500),

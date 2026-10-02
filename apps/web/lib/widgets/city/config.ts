@@ -41,6 +41,15 @@ export interface CityConfig {
   /** Skip the city, sky and road; draw only the residents. */
   transparent: boolean;
   showHud: boolean;
+  /**
+   * Draw the decision log on the canvas.
+   *
+   * Off for OBS and on for a browser: the engine's reasons live where the
+   * decisions are made, and the only place that engine runs is the overlay
+   * itself. Rather than pipe them out over a socket the stream can see, the log
+   * is drawn where it is already true and switched on with `?debug=1`.
+   */
+  debug: boolean;
   showLabels: boolean;
   /** Name shown in the corner, empty for none. */
   cityName: string;
@@ -61,6 +70,7 @@ export const DEFAULT_CITY_CONFIG: CityConfig = {
   pixelSize: 0,
   transparent: false,
   showHud: true,
+  debug: false,
   showLabels: true,
   cityName: "",
   partyGift: 500,

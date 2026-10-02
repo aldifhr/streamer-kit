@@ -31,7 +31,8 @@
     "test:editor": "tsc -p apps/web/tests/tsconfig.scene.json && node apps/web/tests/editor-scene-load.cjs",
     "test:city-audience": "npm run test:city && node apps/web/tests/city-audience.cjs",
     "test:city-tiers": "npm run test:city && node apps/web/tests/city-tiers.cjs",
-    "test:city-feed": "tsc -p apps/web/tests/tsconfig.feed.json && node apps/web/tests/city-subscription.cjs"
+    "test:city-feed": "tsc -p apps/web/tests/tsconfig.feed.json && node apps/web/tests/city-subscription.cjs",
+    "test:city-inspector": "npm run test:city && node apps/web/tests/city-inspector.cjs"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",

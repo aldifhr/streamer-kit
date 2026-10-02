@@ -153,6 +153,31 @@ function specFor(type: string): LocalSpec {
         ],
       };
 
+    case "mayor":
+      // A long white car with a red bar on the roof. It is deliberately the
+      // brightest thing on the road: the mayor's job is to be findable.
+      return {
+        w: 32,
+        h: 13,
+        carH: 10,
+        parts: [
+          [0, 3, 32, 6, "#f0f0f4"],
+          [0, 3, 32, 1, "#ffffff", true],
+          [0, 8, 32, 1, "#a8a8b4", true],
+          // Cabin set back, so it reads as a saloon and not a van.
+          [6, 0, 13, 6, "#e8e8ee"],
+          [7, 1, 11, 3, GLASS],
+          // The bar. Red over blue, because that is what everyone pictures.
+          [10, -2, 5, 2, "#e03040"],
+          [16, -2, 5, 2, "#3060e0"],
+          // Plate, and a stripe down the flank.
+          [2, 6, 5, 2, "#f0c030"],
+          [1, 5, 30, 1, "#3050c0", true],
+          [3, 9, 5, 2, "#1a1a24"],
+          [23, 9, 5, 2, "#1a1a24"],
+        ],
+      };
+
     case "firetruck":
       return {
         w: 30,
@@ -220,6 +245,8 @@ export function speedFor(type: string, base: number): number {
   if (type === "becak" || type === "bakso") return base * 0.8;
   if (type === "angkot") return base * 0.9;
   if (type === "firetruck") return base * 1.5;
+  // Slower than the traffic it is meant to look important in front of.
+  if (type === "mayor") return base * 1.1;
   return base;
 }
 

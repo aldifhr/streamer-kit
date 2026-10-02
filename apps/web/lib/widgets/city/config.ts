@@ -83,6 +83,13 @@ export interface CityEngine {
   vehicles: () => { total: number; byType: Record<string, number> };
   /** Forces the weather, for the editor control and for tests. */
   weather: (kind: "dry" | "rain" | "after" | "rainbow") => void;
+  /** The mission board, what the room has lit up, and who is mayor. */
+  civic: () => {
+    mission: { label: string; progress: number; target: number; cleared: boolean };
+    lit: string[];
+    mayor: { id: string; name: string; diamonds: number; from: string | null } | null;
+    escorts: number;
+  };
   /** The effect queue: what is on stage, what is waiting, what was refused. */
   staging: () => { active: string | null; waiting: number; refused: number };
   /** Shopfront ownership, the weather, what people are doing and what they wear. */

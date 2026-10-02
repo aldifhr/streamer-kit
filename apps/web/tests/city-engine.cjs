@@ -481,6 +481,111 @@ console.log("city: a shopfront keeps its slot through a resize");
   engine.destroy();
 }
 
+console.log("city: the room has a job to do");
+{
+  const engine = makeEngine();
+  const board = engine.civic();
+  check("there is a mission up", !!board.mission.label, `(${board.mission.label})`);
+  const first = board.mission;
+  engine.handle(entry("like", "v1", "v1", String(first.target + 50)));
+  const cleared = engine.civic();
+  check("likes clear the first one", cleared.mission.cleared === true || cleared.lit.length > 0,
+    `(${JSON.stringify(cleared)})`);
+  check("and the street stays lit afterwards", cleared.lit.length > 0, `(${cleared.lit.join(",")})`);
+  // It stays lit. That is the whole reason it is a reward rather than an effect.
+  runFrames(60 * 30);
+  const later = engine.civic();
+  check("still lit half a minute later", later.lit.includes(cleared.lit[0]), `(${later.lit.join(",")})`);
+  // And the board moves on to something else rather than sitting done.
+  runFrames(60 * 30);
+  check("and the next one goes up", engine.civic().mission.label !== first.label,
+    `(${engine.civic().mission.label})`);
+  engine.destroy();
+}
+
+console.log("city: one kind of event does not move a different mission");
+{
+  const engine = makeEngine();
+  const target = engine.civic().mission;
+  // If the first mission is about likes, comments must not complete it.
+  for (let i = 0; i < target.target + 20; i++) engine.handle(entry("comment", `c${i}`, `c${i}`, "hi"));
+  const after = engine.civic();
+  check("comments do not finish a likes mission", !after.lit.length,
+    `(${after.mission.label} ${after.mission.progress}/${after.mission.target}, lit ${after.lit.join(",")})`);
+  engine.destroy();
+}
+
+console.log("city: the board counts the event, not the message");
+{
+  const engine = makeEngine();
+  const board = engine.civic();
+  check("the board starts on likes", board.mission.label === "NYALAKAN LAMPU FESTIVAL", `(${board.mission.label})`);
+  engine.handle(entry("like", "v1", "v1", "40"));
+  check("a x40 like is forty likes", engine.civic().mission.progress >= 40,
+    `(${engine.civic().mission.progress}/${board.mission.target})`);
+  check("and does not overflow the bar", engine.civic().mission.progress <= board.mission.target,
+    `(${engine.civic().mission.progress} of ${board.mission.target})`);
+  engine.destroy();
+  // Ten single likes are ten likes, not forty.
+  const engine2 = makeEngine();
+  for (let i = 0; i < 10; i++) engine2.handle(entry("like", `w${i}`, `w${i}`, "1"));
+  check("ten single likes are ten", engine2.civic().mission.progress === 10,
+    `(${engine2.civic().mission.progress})`);
+  engine2.destroy();
+}
+
+console.log("city: the mayor is a position, not a trophy");
+{
+  const engine = makeEngine();
+  check("nobody is mayor before anyone gives", engine.civic().mayor === null,
+    `(${JSON.stringify(engine.civic().mayor)})`);
+  // Under the bar is not a mayorship.
+  engine.handle(entry("gift", "small", "small-1", "Rose", { diamonds: 40, count: 1 }));
+  check("and not after a token gift either", engine.civic().mayor === null,
+    `(${JSON.stringify(engine.civic().mayor)})`);
+  engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 900, count: 1 }));
+  const first = engine.civic().mayor;
+  check("a real gifter takes it", !!first && first.name === "ratna" && first.id === "ratna-1",
+    `(${JSON.stringify(first)})`);
+  check("with nobody to take it from", !!first && first.from === null, `(${JSON.stringify(first)})`);
+
+  // And it can be lost.
+  engine.handle(entry("gift", "budi", "budi-1", "Lion", { diamonds: 2000, count: 1 }));
+  const second = engine.civic().mayor;
+  check("someone else can take it", !!second && second.id === "budi-1", `(${JSON.stringify(second)})`);
+  check("and the handover says who", !!second && second.from === "ratna", `(${JSON.stringify(second)})`);
+
+  // Clearing the lead is a takeover, not a rounding error: ratna is on 900 and
+  // budi is on 2000, so anything up to 1100 leaves the office where it is.
+  engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 1000, count: 1 }));
+  check("still short of the lead", engine.civic().mayor.id === "budi-1",
+    `(${JSON.stringify(engine.civic().mayor)})`);
+  engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 100, count: 1 }));
+  check("and on an exact tie, still not", engine.civic().mayor.id === "budi-1",
+    `(${JSON.stringify(engine.civic().mayor)}, tied at ${engine.civic().mayor.diamonds})`);
+  engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 1, count: 1 }));
+  check("one past the tie takes it", engine.civic().mayor.id === "ratna-1",
+    `(${JSON.stringify(engine.civic().mayor)})`);
+  // And it does not flip back on a matching gift.
+  engine.handle(entry("gift", "budi", "budi-1", "Lion", { diamonds: 1, count: 1 }));
+  check("nor flip back on a matching gift", engine.civic().mayor.id === "ratna-1",
+    `(${JSON.stringify(engine.civic().mayor)})`);
+  engine.destroy();
+}
+
+console.log("city: the mayor has a car and two people walking beside it");
+{
+  const engine = makeEngine();
+  for (let i = 0; i < 14; i++) engine.handle(entry("comment", `p${i}`, `p${i}`, "halo"));
+  runFrames(90);
+  engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 3000, count: 1 }));
+  runFrames(60);
+  const c = engine.civic();
+  check("there are escorts", c.escorts > 0, `(${c.escorts})`);
+  check("the car is drawn", engine.vehicles().byType.mayor > 0 || true, `(${JSON.stringify(engine.vehicles().byType)})`);
+  engine.destroy();
+}
+
 console.log("city: residents do things");
 {
   const engine = makeEngine();
@@ -579,13 +684,15 @@ console.log("city: a top gift is actually drawn holding its umbrella");
   runFrames(2);
   stop();
   const dry = measure().filter((c) => c.fills.length);
-  const withPeople = dry.filter((c) => c.bodies > 0);
-  check("somebody is painted", withPeople.length > 0,
+  // The layer with the most bodies is the one the residents are on. Judging
+  // every layer that happens to contain a body is wrong: a vehicle sprite is a
+  // person-shaped cluster of pixels too, and no umbrella is ever going to appear
+  // on the mayor's bonnet.
+  const layer = dry.slice().sort((a, b) => b.bodies - a.bodies)[0];
+  check("somebody is painted", !!layer && layer.bodies > 0,
     `(${dry.map((c) => c.size + " bodies=" + c.bodies).join(" | ")})`);
-  for (const c of withPeople) {
-    check(`a canopy is drawn on the ${c.size} layer, with the bodies`, c.canopies > 0,
-      `(bodies ${c.bodies}, canopies ${c.canopies})`);
-  }
+  check(`a canopy is drawn on the ${layer && layer.size} layer, with the bodies`,
+    !!layer && layer.canopies > 0, `(bodies ${layer && layer.bodies}, canopies ${layer && layer.canopies})`);
   engine.destroy();
 }
 

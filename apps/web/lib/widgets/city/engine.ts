@@ -54,6 +54,10 @@ import { createActivities } from "./activities";
 import type { Spot } from "./activities";
 import { createStaging, stagedKindFor } from "./staging";
 import { createWeather, drawPuddles, drawRain, drawRainWash, drawRainbow } from "./weather";
+import { createMissions } from "./missions";
+import type { MissionGoal } from "./missions";
+import { createMayor, ESCORT } from "./mayor";
+import { drawDecorations } from "./decor";
 import type { Weather } from "./weather";
 
 interface Resident {
@@ -75,6 +79,8 @@ interface Resident {
   activity: Activity;
   /** Seconds left in the current activity. */
   actT: number;
+  /** The mayor they are walking with, or null when they are nobody's escort. */
+  escortOf: string | null;
   /** Where an activity takes them, or null. */
   spot: Spot | null;
   /** The other resident they are greeting, if any. */
@@ -260,6 +266,50 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
 
   let totalDiamonds = 0, flashUntil = 0, shakeUntil = 0, shakeAmp = 0;
   let partyUntil = 0, searchUntil = 0, todOffset = 0, nextCar = 0;
+
+  /**
+   * The engine's own time, in milliseconds, as of the last tick.
+   *
+   * Anything on a timer reads this rather than `performance.now()`, because the
+   * two are not the same thing: the tick carries a timestamp the harness and the
+   * frame budget can both shape, and a module that kept its own real-time clock
+   * would hold a board "cleared" forever whenever the two drifted apart.
+   */
+  let clock = 0;
+
+  /** Maps an event kind onto the board's counter, if it feeds it at all. */
+  function missionGoalFor(kind: string): MissionGoal | "none" {
+    if (kind === "like") return "likes";
+    if (kind === "comment") return "comments";
+    if (kind === "join") return "joins";
+    if (kind === "gift") return "gifts";
+    return "none";
+  }
+
+  /** How long a cleared mission stays on the board before the next goes up. */
+  const MISSION_HOLD_MS = 7000;
+
+  const missions = createMissions({
+    holdMs: MISSION_HOLD_MS,
+    now: () => clock,
+    onCleared: (spec) => {
+      addToast(`KOTA MENYELESAIKAN ${spec.label}`, "#ffd95d");
+      sparkle(LW / 2, SY0, 24, "#ffd95d");
+    },
+  });
+
+  const mayor = createMayor({
+    now: () => clock,
+    onChange: (m, tookFrom) => {
+      // The handover is the whole point of a contested title, so it gets said
+      // out loud rather than just changing who is standing next to the car.
+      addToast(
+        tookFrom ? `${m.name} GANTI ${tookFrom.name} SEBAGAI WALIKOTA` : `${m.name} JADI WALIKOTA`,
+        "#7da8ff",
+      );
+      escortMayor(m.id);
+    },
+  });
   let paradeQueue = 0, paradeCooldown = 0, bazaarUntil = 0, fireUntil = 0;
   /** Limos still owed, and how long until the next one is let out. */
   let limoQueue = 0, limoCooldown = 0;
@@ -614,6 +664,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       friends: [],
       x: 0, y: 0, dir: 1, t: rand(0, 10), speed: rand(11, 17),
       state: "walk", tx: 0, ty: 0, wait: 0, moving: false,
+      escortOf: null,
       enterT: 0, exitPhase: 0, exitT: 0, exitMode: "edge", door: null,
       lastActive: performance.now(), bubble: "", bubbleUntil: 0, emote: null, dissolve: 1,
       activity: "none", actT: rand(1, 8), spot: null, partnerId: null,
@@ -792,6 +843,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       }
     }
 
+    updateEscort(p);
     updateActivity(p, dt, now);
 
     if ((p.state === "walk" || p.state === "idle") && now - p.lastActive > config.leaveAfterMs) startExit(p);
@@ -937,6 +989,47 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     if (p.actT <= 0) releaseActivity(p);
   }
 
+  /**
+   * Walks the mayor's two nearest residents along with them.
+   *
+   * Escorts are borrowed from the crowd rather than created, because a mayor
+   * who arrives with two bodyguards out of nowhere is a sprite that appears from
+   * nowhere, and the crowd is already there.
+   */
+  function escortMayor(mayorId: string) {
+    const boss = [...people.values()].filter((p) => p.id !== mayorId && (p.state === "walk" || p.state === "idle"));
+    const taken: string[] = [];
+    for (const p of boss) {
+      if (taken.length >= ESCORT) break;
+      if (greetingBusy.has(p.id) || p.activity !== "none" || p.spot) continue;
+      p.activity = "goto";
+      p.escortOf = mayorId;
+      p.spot = { x: p.x + (p.x < LW / 2 ? -6 : 6), y: p.y, room: 1 };
+      p.actT = 999;
+      taken.push(p.id);
+    }
+  }
+
+  /** Keeps the escort beside the car, and lets go when the title moves on. */
+  function updateEscort(p: Resident) {
+    if (!p.escortOf) return;
+    const boss = people.get(p.escortOf);
+    // Two separate ways to stop: the mayor has left the room, or the title has
+    // moved to somebody else. Both mean this escort goes back to the crowd.
+    if (!boss || mayor.current()?.id !== p.escortOf) {
+      p.escortOf = null;
+      releaseActivity(p);
+      return;
+    }
+    const side = p.x < boss.x ? -5 : 5;
+    p.spot = { x: boss.x + side, y: p.y, room: 1 };
+    p.tx = clamp(boss.x + side, 4, LW - 4);
+    p.ty = boss.y;
+    // Held in place until the car is out of range, which is the only thing that
+    // makes an escort read as an escort rather than as somebody walking slowly.
+    if (Math.abs(p.x - p.tx) > 2) p.actT = 999;
+  }
+
   /** The activity that changes how somebody is drawn, or null. */
   function activityPose(p: Resident): "sit" | "eat" | "phone" | null {
     if (p.activity === "sit" || p.activity === "eat" || p.activity === "phone") return p.activity;
@@ -1026,7 +1119,36 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
   const CAR_COLORS = ["#d84a4a", "#4a7ad8", "#3aa86a", "#e8e8f0", "#2a2a3a", "#8a5ad8", "#e07a2a"];
 
   /** Types drawn by `local.ts` rather than by the generic car builder. */
-  const LOCAL_TYPES = new Set(["ojek", "angkot", "becak", "bakso", "firetruck"]);
+  const LOCAL_TYPES = new Set(["ojek", "angkot", "becak", "bakso", "firetruck", "mayor"]);
+
+  /**
+   * The mayor's car, and the office that comes with it.
+   *
+   * One car for the title rather than one per handover: the room watches the
+   * car move, not whoever is standing beside it. It is deliberately not spawned
+   * through the traffic path, which is capped and recycled, because dropping the
+   * car when the road got busy would drop the office with it.
+   */
+  let mayorCar: { x: number; base: number; dir: number; cv: Sprite } | null = null;
+
+  /** Drives it, or parks it at the kerb, or puts it away when the title moves. */
+  function syncMayorCar(now: number) {
+    const m = mayor.current();
+    if (!m) {
+      mayorCar = null;
+      return;
+    }
+    if (!mayorCar) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const rh = LH - ROAD0;
+      mayorCar = { x: dir > 0 ? -40 : LW + 40, base: dir > 0 ? ROAD0 + R(rh * 0.42) : ROAD0 + R(rh * 0.84), dir, cv: localCanvas("mayor", dir) };
+    }
+    // Mostly parked, driving now and then: a car that crawls the whole time
+    // stops reading as important and starts reading as traffic.
+    mayorCar.x += mayorCar.dir * speedFor("mayor", 20) * (now % 9000 < 4200 ? 1 : 0.08);
+    if (mayorCar.dir > 0 && mayorCar.x > LW + 40) mayorCar.x = -40;
+    if (mayorCar.dir < 0 && mayorCar.x < -40) mayorCar.x = LW + 40;
+  }
 
   function localCanvas(type: string, dir: number): Sprite {
     const key = type + dir;
@@ -1144,6 +1266,17 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     if (entry.kind === "join") return;
     p.lastActive = now;
 
+    // Every kind of participation feeds the board, not just the one on it: the
+    // room has to be able to progress at a moment when it is chatting rather
+    // than liking, or the mission stalls for reasons nobody can see.
+    const goal = missionGoalFor(entry.kind);
+    // A like is worth the number of likes, not one. A run of x10 likes is ten
+    // likes, and crediting the events instead of the value made the board
+    // unreachable at any rate a room actually likes at.
+    if (goal === "likes") missions.credit("likes", Math.max(1, Number(entry.value) || 1));
+    else if (goal === "comments" || goal === "joins") missions.credit(goal, 1);
+    // Gifts are credited below, where the diamond value is known.
+
     switch (entry.kind) {
       case "comment": {
         p.bubble = clean(entry.value).slice(0, 44);
@@ -1186,6 +1319,10 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         if (d > 0) {
           p.given += d;
           p.cos = cosFor(p.given);
+          // Worth more than one tick of the board, and worth a car if it is
+          // enough of it.
+          missions.credit("gifts", Math.max(1, Math.round(d / 100)));
+          mayor.donate(p.id, p.name, d);
           savePerson(p);
           shops.donate(p.id, p.name, d);
         }
@@ -1234,6 +1371,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * ------------------------------------------------------------------ */
 
   function updateWorld(dt: number, now: number) {
+    missions.update();
+    syncMayorCar(now);
     for (let i = cars.length - 1; i >= 0; i--) {
       const c = cars[i];
       c.x += c.dir * c.speed * dt;
@@ -1559,6 +1698,15 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       drawables.push({
         y: c.base,
         fn: () => g.drawImage(c.cv, R(c.x), c.base - (c.cv.carH ?? 11) - 1),
+      });
+    }
+    // The mayor's car is drawn with the traffic but kept out of it: it is not
+    // spawned, not capped, and not recycled, because dropping it when the road
+    // gets busy would drop the office with it.
+    if (mayorCar) {
+      drawables.push({
+        y: mayorCar.base,
+        fn: () => g.drawImage(mayorCar!.cv, R(mayorCar!.x), mayorCar!.base - (mayorCar!.cv.carH ?? 10) - 1),
       });
     }
     for (const p of people.values()) {
@@ -1900,6 +2048,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     simulated += dt;
     if (!ready) return;
 
+    clock = now;
     const t = now / 1000;
     // A pinned clock does not move; otherwise the day runs on `dayLen` seconds
     // from wherever `todOffset` has shifted it to.
@@ -1948,6 +2097,9 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       layout.props.filter((q) => q.type === "lamp").map((q) => ({ x: q.x, y: q.y })),
       nightF(),
     );
+    // What the room has lit up, drawn between the city and the weather: the
+    // decorations are lit by the street, and the rain falls in front of them.
+    drawDecorations(mainCtx, missions.lit(), LW, SY0, ROAD0, t, nightF());
     drawLights(mainCtx, now, t);
     drawEffects(mainCtx, now, t);
     if (config.showLabels) drawLabels(mainCtx, now);
@@ -2005,6 +2157,17 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     },
     residentCount: () => people.size,
     weather: (k: Weather) => weather.force(k),
+    civic: () => {
+      const m = missions.current();
+      const may = mayor.current();
+      return {
+        mission: { label: m.spec.label, progress: m.progress, target: m.spec.target, cleared: missions.state().justCleared },
+        lit: missions.lit(),
+        mayor: may ? { id: may.id, name: may.name, diamonds: may.diamonds, from: may.from } : null,
+        escorts: [...people.values()].filter((p) => p.escortOf).length,
+        car: mayorCar ? { x: Math.round(mayorCar.x), onScreen: mayorCar.x > 0 && mayorCar.x < LW } : null,
+      };
+    },
     staging() {
       const a = staging.active();
       return { active: a ? a.kind : null, waiting: staging.waiting(), refused: staging.refused() };

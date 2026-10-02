@@ -42,6 +42,9 @@ const MODULES = [
   "activities",
   "staging",
   "weather",
+  "missions",
+  "mayor",
+  "decor",
   "engine",
 ];
 
@@ -138,6 +141,7 @@ ${bundle}
     engine.handle(ev("gift", "DEWI", "dewi-1", "Galaxy", { diamonds: 400, count: 1 }));
     engine.handle(ev("gift", "BUDI", "budi-1", "Rose", { diamonds: 60, count: 1 }));
   };
+  window.__civic = function (n) { for (var i = 0; i < n; i++) engine.handle(ev("like", "l" + i, "l" + i, "60")); engine.handle(ev("gift", "GUBERNUR", "gub-1", "Lion", { diamonds: 4000, count: 1 })); return engine.civic(); };
   window.__rain = function () { engine.weather("rain"); return "raining"; };
   window.__world = function () { return { w: engine.world(), s: engine.staging(), v: engine.vehicles() }; };
 
@@ -158,10 +162,25 @@ ${bundle}
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, page);
 // A bundle that cannot resolve an import is a broken harness, not a broken
-// engine, and the two look the same in a browser: a blank canvas. Checked here
-// so the difference is a failed command rather than a picture of nothing.
+// engine, and in a browser the two look identical: a blank canvas with nothing
+// in the console. So both halves are checked here, where a failure is a failed
+// command instead of a picture of nothing.
 const missing = MODULES.filter((m) => !fs.existsSync(path.join(CACHE, `${m}.js`)));
 if (missing.length) {
   throw new Error(`not compiled, run \`npm run test:city\` first: ${missing.join(", ")}`);
+}
+
+// Every module the engine asks for has to be in the list above. Deriving it
+// from the sources rather than keeping the list by hand: adding a module to
+// `lib/widgets/city/` and forgetting the harness is the single easiest way to
+// lose an afternoon to a canvas that renders nothing.
+const known = new Set(MODULES);
+for (const m of MODULES) {
+  const src = fs.readFileSync(path.join(CACHE, `${m}.js`), "utf8");
+  for (const match of src.matchAll(/require\(["`]\.\/([\w.-]+)["`]\)/g)) {
+    if (!known.has(match[1])) {
+      throw new Error(`${m}.js requires ./${match[1]}, which is not in MODULES`);
+    }
+  }
 }
 console.log(OUT);

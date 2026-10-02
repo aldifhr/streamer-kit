@@ -79,6 +79,8 @@ export interface CityEngine {
   residentCount: () => number;
   /** Live effect counts, per kind. Their sum is the scene's per-frame cost. */
   effectCounts: () => { coins: number; hearts: number; confetti: number; sparks: number };
+  /** Vehicles on the road, and how many are of each type. */
+  vehicles: () => { total: number; byType: Record<string, number> };
   /** Total simulated seconds stepped against the wall clock it was given. */
   timeAccount: () => { simulated: number; wall: number };
   /** Resident counts keyed by stable user id, for the editor's inspector. */

@@ -309,6 +309,29 @@ console.log("city: transients stay under a ceiling");
   engine.destroy();
 }
 
+console.log("city: a gift procession is a procession, not a wall");
+{
+  const engine = makeEngine();
+  // A run of large gifts, which is what queues the parade vehicles. Each one
+  // used to appear instantly at the same point on the same lane, so the faster
+  // drove through the slower and the lane became one solid line.
+  for (let i = 0; i < 60; i++) {
+    engine.handle(entry("gift", `g${i}`, `g${i}`, "Lion", { diamonds: 999, count: 1 }));
+  }
+  let peak = 0;
+  for (let i = 0; i < 60 * 30; i++) {
+    runFrames(1, 16);
+    peak = Math.max(peak, engine.vehicles().total);
+  }
+  check("the road never fills up", peak <= 10, `(peak ${peak} vehicles)`);
+  // The procession is deliberately short. A deep queue does not read as a bigger
+  // parade, it reads as traffic that never stops, so the road has to come back to
+  // ordinary traffic on its own once the gifts have stopped.
+  const after = engine.vehicles().total;
+  check("the road returns to ordinary traffic", after <= 5, `(${after} left after 30s)`);
+  engine.destroy();
+}
+
 console.log("city: a full room still admits new viewers");
 {
   const engine = makeEngine({ maxPeople: 5 });

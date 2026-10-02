@@ -120,6 +120,28 @@ const CAP = { coins: 220, hearts: 160, confetti: 420, sparks: 700 } as const;
 /** Rockets are staggered by a delay, so the cap is on the queue as a whole. */
 const ROCKET_CAP = 24;
 
+/**
+ * Vehicles on the road at once.
+ *
+ * Every other transient in this scene has a ceiling and the traffic did not. A
+ * burst of large gifts queued a limo per gift, all of them appearing at the same
+ * point on the same lane with independently randomised speeds, so the faster
+ * ones drove through the slower ones and the lane became one unbroken line of
+ * eighteen vehicles with confetti stacked on the roofs.
+ */
+const CAR_CAP = 10;
+/** Seconds between the limos in a gift procession. */
+const LIMO_GAP = 1.4;
+/**
+ * How many parade vehicles one run of gifts can put on the road.
+ *
+ * The queue is short on purpose. A deep queue does not look like a bigger
+ * parade, it looks like traffic that never stops: at one vehicle every 1.4
+ * seconds, a burst of sixty gifts kept the road busy for the better part of a
+ * minute after the last one arrived.
+ */
+const LIMO_QUEUE_CAP = 3;
+
 export interface CityEngineOptions {
   canvas: HTMLCanvasElement;
   config: Partial<CityConfig>;
@@ -157,7 +179,9 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
   const glowCache = new Map<number, HTMLCanvasElement>();
 
   let totalDiamonds = 0, flashUntil = 0, shakeUntil = 0, shakeAmp = 0;
-  let partyUntil = 0, searchUntil = 0, todOffset = 0, nextCar = 0, limoPending = 0;
+  let partyUntil = 0, searchUntil = 0, todOffset = 0, nextCar = 0;
+  /** Limos still owed, and how long until the next one is let out. */
+  let limoQueue = 0, limoCooldown = 0;
   /** Where the day starts when nothing has pinned it. */
   const START_TIME = 0.2;
   let TOD = START_TIME;
@@ -677,7 +701,14 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
 
   const CAR_COLORS = ["#d84a4a", "#4a7ad8", "#3aa86a", "#e8e8f0", "#2a2a3a", "#8a5ad8", "#e07a2a"];
 
-  function spawnCar(forceType?: string, forceDir?: number) {
+  /**
+   * Puts a vehicle on the road, if there is room for it.
+   *
+   * Returns whether one was added, so a caller with a queue can try again rather
+   * than dropping the request.
+   */
+  function spawnCar(forceType?: string, forceDir?: number): boolean {
+    if (cars.length >= CAR_CAP) return false;
     const dir = forceDir || (Math.random() < 0.5 ? 1 : -1);
     const r = Math.random();
     const type = forceType || (r < 0.5 ? "sedan" : r < 0.65 ? "van" : r < 0.8 ? "taxi" : r < 0.9 ? "bus" : "sedan");
@@ -687,14 +718,22 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     const cv = carCanvas(type, color, dir);
     const rh = LH - ROAD0;
     const base = dir > 0 ? ROAD0 + R(rh * 0.42) : ROAD0 + R(rh * 0.84);
+    const x = dir > 0 ? -cv.width - 4 : LW + 4;
+    // Headway at the entry point. Vehicles have no collision and no lane
+    // discipline, so anything allowed out while another is still sitting on the
+    // entry point ends up inside it, and a procession degenerates into a solid
+    // line as soon as the speeds differ.
+    const headway = cv.width + 10;
+    for (const c of cars) {
+      if (Math.abs(c.base - base) < 6 && Math.abs(c.x - x) < headway) return false;
+    }
     cars.push({
-      cv, dir, type,
-      x: dir > 0 ? -cv.width - 4 : LW + 4,
-      base,
+      cv, dir, type, x, base,
       speed: rand(26, 44) * (type === "bus" ? 0.8 : 1),
       ph: rand(0, 6),
       nextConf: 0,
     });
+    return true;
   }
 
   /* ---------------------------------------------------------------------
@@ -843,7 +882,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
           flashUntil = now + 250;
           shake(1.2, 2);
           cheerAll(6000);
-          limoPending = 1;
+          limoQueue = Math.min(limoQueue + 1, LIMO_QUEUE_CAP);
           for (let i = 0; i < 12; i++) launchRocket(1.5 + i * 0.55);
           addConfetti(140, true);
         }
@@ -878,9 +917,12 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       spawnCar();
       nextCar = rand(1.8, 5);
     }
-    if (limoPending) {
-      limoPending = 0;
-      spawnCar("limo", 1);
+    // The procession is let out over time rather than all at once, so a burst of
+    // gifts reads as a parade instead of a wall.
+    limoCooldown -= dt;
+    if (limoQueue > 0 && limoCooldown <= 0) {
+      if (spawnCar("limo", 1)) limoQueue -= 1;
+      limoCooldown = LIMO_GAP;
     }
 
     for (let i = coins.length - 1; i >= 0; i--) {
@@ -1544,6 +1586,11 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       }
     },
     residentCount: () => people.size,
+    vehicles() {
+      const byType: Record<string, number> = {};
+      for (const c of cars) byType[c.type] = (byType[c.type] || 0) + 1;
+      return { total: cars.length, byType };
+    },
     effectCounts: () => ({
       coins: coins.length,
       hearts: hearts.length,

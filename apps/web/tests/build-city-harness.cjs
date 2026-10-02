@@ -107,6 +107,12 @@ ${bundle}
   setTimeout(function () {
     engine.handle(ev("gift", "MAYA", "maya-10", "Galaxy", { giftName: "Galaxy", diamonds: 220, count: 1 }));
   }, 3200);
+  // A run of large gifts, the case that used to fill the road. Driven from the
+  // page so the browser can be watched through it rather than asserted at.
+  window.__burst = function (n) {
+    for (var i = 0; i < n; i++) engine.handle(ev("gift", "burst" + i, "burst" + i, "Lion", { diamonds: 999, count: 1 }));
+    return engine.vehicles();
+  };
 
   setInterval(function () {
     var c = engine.effectCounts();

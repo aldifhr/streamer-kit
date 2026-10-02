@@ -95,6 +95,7 @@ export function WidgetPreview({ widget: w }: { widget: WidgetType }) {
             viewers={142}
             sceneId={`preview-${w.id}`}
             overlayId={`preview-${w.id}`}
+            preview
           />
         </div>
       </div>

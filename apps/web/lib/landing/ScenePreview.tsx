@@ -68,6 +68,7 @@ function Widget({
         // here: the poll widget resolves it to a 404 from the sample backend and
         // draws nothing, which is what a sample scene should show anyway.
         overlayId="sample"
+        preview
       />
     </div>
   );

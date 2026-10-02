@@ -92,6 +92,18 @@ export interface WidgetProps {
    * poll fetched by widget id could never match the one the editor created.
    */
   overlayId: string;
+  /**
+   * True when the widget is drawn as a sample rather than as an overlay.
+   *
+   * The landing page mounts every widget to show what it puts on screen, and it
+   * has no overlay to speak of. A widget that addresses the API by overlay id
+   * must not go looking: the poll would request `/api/polls/preview-poll`, which
+   * asks for an overlay that does not exist, on every visit to a public page.
+   * The response is handled — a 404 is not a crash — but a console full of
+   * failures for something that was never going to succeed is noise about a real
+   * problem, and it is exactly the kind that hides the next one.
+   */
+  preview?: boolean;
 }
 
 export interface WidgetType {

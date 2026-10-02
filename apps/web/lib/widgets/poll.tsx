@@ -33,7 +33,7 @@ interface Poll {
   mine: string | null;
 }
 
-function Polls({ style, overlayId }: WidgetProps) {
+function Polls({ style, overlayId, preview }: WidgetProps) {
   const showResults = bool(style, "show-results", true);
   const showBar = bool(style, "show-bar", true);
   const [poll, setPoll] = useState<Poll | null>(null);
@@ -43,9 +43,12 @@ function Polls({ style, overlayId }: WidgetProps) {
   useEffect(() => {
     setPoll(null);
     loaded.current = true;
-    void load();
+    // A sample on the landing page has no overlay behind it, so the id it was
+    // handed is a placeholder that resolves to nothing. Asking anyway produces a
+    // 404 per page view, and a console full of those buries a real failure.
+    if (!preview) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overlayId]);
+  }, [overlayId, preview]);
 
   async function load() {
     try {

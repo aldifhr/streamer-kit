@@ -104,6 +104,7 @@ function WidgetSwatch({
         viewers={1284}
         sceneId={`swatch:${theme.id}`}
         overlayId="swatch"
+        preview
       />
     </div>
   );

@@ -88,6 +88,14 @@ export interface AstroEngine {
    * The number the frame loop draws, and the number `maxAstro` is meant to bound.
    */
   rosterSize: () => number;
+  /**
+   * Live effect counts, per kind.
+   *
+   * Public because the per-frame cost of the scene is exactly the sum of these,
+   * and a test watching draw calls instead would also count the feed and the
+   * name plates and report a breach that was really just a busier frame.
+   */
+  effectCounts: () => { crates: number; asteroids: number; streaks: number; sparks: number };
   reset: () => void;
   destroy: () => void;
 }
@@ -194,10 +202,47 @@ export function createAstroEngine(opts: {
   let bgLit: HTMLCanvasElement | null = null;
 
   const astros = new Map<string, Astro>();
+  /**
+   * Hard ceiling on live effects, per kind.
+   *
+   * Every effect below is spawned by an event, and the rate of events is the
+   * stream's business, not ours. An active room will happily deliver several
+   * gifts inside one frame, and each large one adds five asteroids and fourteen
+   * streaks. Without a ceiling the arrays only ever lose members through
+   * expiry, and asteroids and streaks have no age limit at all — they leave when
+   * they cross the edge, which a slow or deflecting one never does. The result
+   * is sprites that accumulate for the life of the overlay, every one of them
+   * re-blitted on every frame, which is what froze the browser on a busy room:
+   * not one large gift, but a few thousand of them.
+   *
+   * The cap evicts the oldest rather than refusing new ones, so the scene keeps
+   * responding to gifts no matter how far past the ceiling the room goes. A gift
+   * that gets refused outright would read as the widget ignoring the streamer.
+   */
+  const MAX_CRATES = 16;
+  const MAX_ASTEROIDS = 24;
+  const MAX_STREAKS = 40;
+  const MAX_SPARKS = 220;
+
+  /** Drops the oldest members until `list` is back within its ceiling. */
+  function trim<T>(list: T[], max: number): T[] {
+    if (list.length > max) list.splice(0, list.length - max);
+    return list;
+  }
+
   const crates: { x: number; y: number; vx: number; vy: number; born: number }[] = [];
-  const asteroids: { x: number; y: number; vx: number; vy: number; r: number; rows: number[]; cr: number[][] }[] = [];
+  const asteroids: {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    r: number;
+    rows: number[];
+    cr: number[][];
+    born: number;
+  }[] = [];
   const sparks: { x: number; y: number; vx: number; vy: number; life: number; decay: number; c: string; s: number }[] = [];
-  const streaks: { x: number; y: number; vx: number; vy: number; delay: number; len: number }[] = [];
+  const streaks: { x: number; y: number; vx: number; vy: number; delay: number; len: number; born: number }[] = [];
   const feed: { text: string; t: number }[] = [];
   let rocket: { x: number; y: number; t: number; dur: number } | null = null;
   let partyUntil = 0;
@@ -781,6 +826,13 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       c: Math.random() < 0.5 ? "#ffb347" : "#fff3c4",
       s: 1,
     });
+    // Called once per astronaut per frame, so it is the only effect here whose
+    // count scales with roster size and framerate rather than with events. The
+    // sparks are short-lived and the per-frame expiry collects them, but a
+    // ceiling still has to be here: it is the difference between a scene that
+    // costs the same on a quiet room and on a full one, and a room where it
+    // does not.
+    trim(sparks, MAX_SPARKS);
   }
 
   function updateAstro(a: Astro, dt: number, now: number) {
@@ -1154,6 +1206,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
         born: performance.now(),
       });
     }
+    trim(crates, MAX_CRATES);
   }
 
   function drawCrate(c: (typeof crates)[number], now: number) {
@@ -1190,6 +1243,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
         r,
         rows,
         cr,
+        born: performance.now(),
       });
     }
     for (let i = 0; i < 14; i++) {
@@ -1200,8 +1254,11 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
         vy: rand(95, 175),
         delay: i * 0.12,
         len: R(rand(14, 30)),
+        born: performance.now(),
       });
     }
+    trim(asteroids, MAX_ASTEROIDS);
+    trim(streaks, MAX_STREAKS);
   }
 
   function shootingStar() {
@@ -1212,8 +1269,10 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       vx: (l ? 1 : -1) * rand(90, 160),
       vy: rand(60, 110),
       delay: 0,
+      born: performance.now(),
       len: 18,
     });
+    trim(streaks, MAX_STREAKS);
   }
 
   function drawAsteroid(s: (typeof asteroids)[number]) {
@@ -1287,6 +1346,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
         s: Math.random() < 0.3 ? 2 : 1,
       });
     }
+    trim(sparks, MAX_SPARKS);
   }
 
   function updateWorld(dt: number, now: number) {
@@ -1300,7 +1360,14 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       const a = asteroids[i];
       a.x += a.vx * dt;
       a.y += a.vy * dt;
-      if (a.x < -80 || a.x > LW + 80 || a.y < -40 || a.y > LH + 40) asteroids.splice(i, 1);
+      // The age limit is not belt-and-braces next to the offscreen test: an
+      // asteroid only leaves when it crosses an edge, and a shower that spawned
+      // it near a corner with a shallow velocity can sit there indefinitely.
+      // Sprites this size accumulate fast enough to matter, so they also retire
+      // on their own.
+      if (a.x < -80 || a.x > LW + 80 || a.y < -40 || a.y > LH + 40 || now - a.born > 20000) {
+        asteroids.splice(i, 1);
+      }
     }
     for (let i = streaks.length - 1; i >= 0; i--) {
       const m = streaks[i];
@@ -1310,7 +1377,12 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       m.x += m.vx * dt;
       m.y += m.vy * dt;
-      if (m.y > LH + 60 || m.x < -80 || m.x > LW + 80) streaks.splice(i, 1);
+      // Same reasoning as the asteroids: `delay` holds a streak in place before
+      // it starts moving, and a long queue behind it would otherwise never
+      // reach the expiry above.
+      if (m.y > LH + 60 || m.x < -80 || m.x > LW + 80 || now - m.born > 12000) {
+        streaks.splice(i, 1);
+      }
     }
     for (let i = sparks.length - 1; i >= 0; i--) {
       const s = sparks[i];
@@ -1338,6 +1410,7 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
       }
       if (k >= 1) rocket = null;
     }
+    trim(sparks, MAX_SPARKS);
     if (now < partyUntil && Math.random() < dt * 5) {
       const x = rand(LW * 0.1, LW * 0.9);
       const y = rand(LH * 0.1, LH * 0.6);
@@ -1661,6 +1734,22 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
      */
     rosterSize() {
       return astros.size;
+    },
+    /**
+     * Live effect counts, per kind.
+     *
+     * The frame loop draws every one of these on every frame, so their sum is
+     * the scene's real per-frame cost. Read it to ask whether a cap held — a
+     * draw-call count also moves with the feed and the name plates and would
+     * report a breach that was really just a busier frame.
+     */
+    effectCounts() {
+      return {
+        crates: crates.length,
+        asteroids: asteroids.length,
+        streaks: streaks.length,
+        sparks: sparks.length,
+      };
     },
     reset() {
       store = {};

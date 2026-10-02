@@ -86,6 +86,42 @@ export interface CityLayout {
  */
 export type ShopOwners = Record<number, { name: string; tier: number }>;
 
+/**
+ * How the street is built at each size of room.
+ *
+ * The audience used to change nothing but the backdrop's height, which made a
+ * five-tier ladder into a single rung. These are the parts that actually read as
+ * a place getting busier: how wide the shopfronts are, how many storeys they
+ * have, whether there is a gap between them at all, and how many street lamps
+ * and lit windows there are to light the street with.
+ *
+ * Small rooms get narrow frontages, one storey and alley gaps. Large ones get
+ * wide frontages, more storeys and buildings packed shoulder to shoulder, which
+ * is what a city skyline is made of.
+ */
+export interface TierLook {
+  /** Shopfront width range, in pixels. */
+  minW: number;
+  wSpread: number;
+  /** Building height as a fraction of the scene height. */
+  minH: number;
+  hSpread: number;
+  /** Gap between buildings. A kampung has alleys; a metropolis does not. */
+  gap: number;
+  /** Street lamps along the pavement. */
+  lamps: number;
+  /** Fraction of windows lit warm, which is most of what reads as "busy". */
+  lit: number;
+}
+
+export const TIER_LOOKS: TierLook[] = [
+  { minW: 24, wSpread: 10, minH: 0.15, hSpread: 0.07, gap: 4, lamps: 1, lit: 0.25 },
+  { minW: 30, wSpread: 14, minH: 0.21, hSpread: 0.09, gap: 3, lamps: 2, lit: 0.4 },
+  { minW: 38, wSpread: 16, minH: 0.27, hSpread: 0.13, gap: 2, lamps: 3, lit: 0.55 },
+  { minW: 44, wSpread: 18, minH: 0.35, hSpread: 0.15, gap: 1, lamps: 4, lit: 0.7 },
+  { minW: 52, wSpread: 20, minH: 0.43, hSpread: 0.15, gap: 0, lamps: 4, lit: 0.85 },
+];
+
 export function genCity(
   doc: Document,
   LW: number,
@@ -93,13 +129,16 @@ export function genCity(
   SY0: number,
   SY1: number,
   owners: ShopOwners = {},
+  tier = 2,
 ): CityLayout {
+  const look = TIER_LOOKS[Math.max(0, Math.min(TIER_LOOKS.length - 1, tier))];
   const rnd = mulberry32(7 + LW * 13 + LH);
   const buildings: Building[] = [], doors: Door[] = [], wins: Win[] = [], signs: Sign[] = [];
   let x = -6, si = Math.floor(rnd() * SIGNS.length);
   let index = 0;
   while (x < LW + 6) {
-    const w = R(40 + rnd() * 26), h = R(LH * (0.26 + rnd() * 0.24));
+    const w = R(look.minW + rnd() * look.wSpread);
+    const h = R(LH * (look.minH + rnd() * look.hSpread));
     const pal = BPAL[Math.floor(rnd() * BPAL.length)];
     // The shop and its door are worked out here rather than patched on after the
     // building is pushed, so a Building is never briefly incomplete.
@@ -123,7 +162,15 @@ export function genCity(
     };
     for (let wy = b.top + 9; wy < SY0 - SHOP_H - 5; wy += 10) {
       for (let wx = x + 5; wx < x + w - 8; wx += 8) {
-        wins.push({ x: wx, y: wy, thr: 0.15 + rnd() * 0.6, warm: rnd() > 0.2, ph: rnd() * 100 });
+        // `thr` is how dark a window is before it lights, so a higher floor
+        // leaves more of them dark — a quiet street at dusk, a lit tower at night.
+        wins.push({
+          x: wx,
+          y: wy,
+          thr: (1 - look.lit) * (0.4 + rnd() * 0.8),
+          warm: rnd() > 0.2,
+          ph: rnd() * 100,
+        });
       }
     }
     doors.push({ x: doorX + 3, y: SY0, openUntil: 0 });
@@ -137,13 +184,18 @@ export function genCity(
       owned,
     });
     buildings.push(b);
-    x += w + Math.floor(rnd() * 3);
+    x += w + (look.gap > 0 ? Math.floor(rnd() * look.gap) : 0);
     index += 1;
   }
 
   const props: Prop[] = [];
   const yb = SY1 + 3;
-  for (const f of [0.1, 0.36, 0.62, 0.9]) props.push(prop(doc, "lamp", R(LW * f), yb));
+  // Lamps are spread evenly whatever the count, so a kampung does not look lit
+  // from one end and dark from the other.
+  for (let i = 0; i < look.lamps; i += 1) {
+    const f = look.lamps === 1 ? 0.5 : 0.1 + (0.8 * i) / (look.lamps - 1);
+    props.push(prop(doc, "lamp", R(LW * f), yb));
+  }
   for (const f of [0.23, 0.49, 0.8]) props.push(prop(doc, "tree", R(LW * f), yb));
   props.push(prop(doc, "bench", R(LW * 0.43), yb), prop(doc, "trash", R(LW * 0.3), yb));
   props.push(prop(doc, "busstop", R(LW * 0.72), yb), prop(doc, "mail", R(LW * 0.55), yb));

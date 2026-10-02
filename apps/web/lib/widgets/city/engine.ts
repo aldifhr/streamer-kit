@@ -59,7 +59,7 @@ import type { MissionGoal } from "./missions";
 import { createMayor, ESCORT } from "./mayor";
 import { drawDecorations } from "./decor";
 import type { Weather } from "./weather";
-import { audienceGrowth, easeAudience, formatAudience } from "./audience";
+import { audienceGrowth, audienceTier, easeAudience, formatAudience } from "./audience";
 
 interface Resident {
   id: string;
@@ -524,11 +524,24 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    */
   let audienceReal = 0;
   let audienceShown = 0;
+  /**
+   * The tier the baked layout was built for.
+   *
+   * The street is re-laid-out only when this changes, not as the audience moves:
+   * a room sitting at 240 does not re-bake its buildings two hundred times while
+   * the count flickers, and the tiers are far enough apart that crossing one is
+   * a moment worth building for.
+   */
+  let bakedTier = -1;
   function rebakeCity(owners: ShopOwners) {
     if (!ready) return;
     rebakeCount += 1;
     bakedOwners = owners;
-    layout = genCity(doc, LW, LH, SY0, SY1, owners);
+    // The tier has to travel with the layout here too. This runs every time shop
+    // ownership changes, so a gift in a small room was quietly rebuilding the
+    // street back to the default mid size — a kampung that turned into a
+    // district the moment anyone sent a diamond.
+    layout = genCity(doc, LW, LH, SY0, SY1, owners, bakedTier);
     layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
     lastSkyUpdate = -1e9;
   }
@@ -1450,6 +1463,12 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
 
   function updateWorld(dt: number, now: number) {
     audienceShown = easeAudience(audienceShown, audienceReal, dt);
+
+    // A tier change re-lays the street: frontage widths, storeys, alley gaps and
+    // lamp count all differ per tier, and none of them can be adjusted in place
+    // because they are baked. Crossing one is rare, so the cost is irrelevant.
+    const tier = audienceTier(audienceShown).index;
+    if (ready && tier !== bakedTier) layoutFor(W || canvas.clientWidth || 0, H || canvas.clientHeight || 0);
     missions.update();
     syncMayorCar(now);
     if (escortRetryIn > 0) {
@@ -2113,7 +2132,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     ROAD0 = SY1 + 6;
 
     bakedOwners = shops.owners();
-    layout = genCity(doc, LW, LH, SY0, SY1, bakedOwners);
+    bakedTier = audienceTier(audienceShown).index;
+    layout = genCity(doc, LW, LH, SY0, SY1, bakedOwners, bakedTier);
     layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
     lastSkyUpdate = -1e9;
     for (const p of people.values()) {
@@ -2283,6 +2303,19 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         // TikTok reports, the other is what the city has eased toward.
         audience: audienceShown,
         audienceReal,
+        // Which tier the street was actually laid out for, and what came out of
+        // it. The HUD reports the tier from the audience while this reports the
+        // one that was baked, and the gap between those two is what a "it says
+        // METROPOLIS but the buildings are still a kampung" report would be.
+        tier: audienceTier(audienceShown).name,
+        bakedTier,
+        layout: {
+          buildings: layout.buildings.length,
+          widest: Math.max(...layout.buildings.map((b) => b.w)),
+          tallest: Math.max(...layout.buildings.map((b) => b.h)),
+          lamps: layout.props.filter((p) => p.type === "lamp").length,
+          windows: layout.wins.length,
+        },
         shops: shops.list().map((sh) => ({ name: sh.name, diamonds: Math.round(sh.diamonds), slot: sh.slot })),
         // What the baked layer was actually built from, which is not the same
         // question as what the ranking says: the signs are pixels, and pixels

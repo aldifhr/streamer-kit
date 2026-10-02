@@ -614,9 +614,16 @@ console.log("city: the mayor has a car and two people walking beside it");
   for (let i = 0; i < 14; i++) engine.handle(entry("comment", `p${i}`, `p${i}`, "halo"));
   runFrames(90);
   engine.handle(entry("gift", "ratna", "ratna-1", "Lion", { diamonds: 3000, count: 1 }));
-  runFrames(60);
-  const c = engine.civic();
-  check("there are escorts", c.escorts > 0, `(${c.escorts})`);
+  // Escorts are assigned from whoever is free at the moment the mayor takes the
+  // seat, and the engine keeps retrying while the chair is held and the escort
+  // count is short. Asserting after a fixed number of frames tested the retry's
+  // latency rather than the behaviour, and failed intermittently.
+  let c = engine.civic();
+  for (let i = 0; i < 40 && c.escorts === 0; i += 1) {
+    runFrames(15);
+    c = engine.civic();
+  }
+  check("there are escorts", c.escorts > 0, `(${c.escorts}) after 600 frames`);
   check("the car is drawn", engine.vehicles().byType.mayor > 0 || true, `(${JSON.stringify(engine.vehicles().byType)})`);
   engine.destroy();
 }

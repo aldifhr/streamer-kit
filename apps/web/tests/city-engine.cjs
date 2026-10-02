@@ -526,12 +526,35 @@ console.log("city: one kind of event does not move a different mission");
   engine.destroy();
 }
 
+console.log("city: the board reads the wire the way the feed writes it");
+// lib/feed.ts builds a like as `x${d.count}`. Every shape below is one the wire
+// can actually produce, and each has to be read as the number of likes it names
+// rather than as a single event.
+{
+  const shape = (value) => {
+    const e = makeEngine();
+    e.handle(entry("like", "s", "s", value));
+    const n = e.civic().mission.progress;
+    e.destroy();
+    return n;
+  };
+  check("x40 is forty", shape("x40") === 40, `(got ${shape("x40")})`);
+  check("x1 is one", shape("x1") === 1, `(got ${shape("x1")})`);
+  check("a bare number still works", shape("40") === 40, `(got ${shape("40")})`);
+  // The board caps its bar, so this cannot assert 1000 — it asserts the run was
+  // not read as the 1 before the comma, which is the failure that mattered.
+  check("a comma run is not read as the first digit", shape("x1,000") >= 100, `(got ${shape("x1,000")})`);
+  check("nonsense counts as one", shape("x") === 1, `(got ${shape("x")})`);
+}
+
 console.log("city: the board counts the event, not the message");
 {
   const engine = makeEngine();
   const board = engine.civic();
   check("the board starts on likes", board.mission.label === "NYALAKAN LAMPU FESTIVAL", `(${board.mission.label})`);
-  engine.handle(entry("like", "v1", "v1", "40"));
+  // `x${count}`, exactly what lib/feed.ts writes for a like. Passing a bare "40"
+  // instead is how this test agreed with a parser that could not read the wire.
+  engine.handle(entry("like", "v1", "v1", "x40"));
   check("a x40 like is forty likes", engine.civic().mission.progress >= 40,
     `(${engine.civic().mission.progress}/${board.mission.target})`);
   check("and does not overflow the bar", engine.civic().mission.progress <= board.mission.target,
@@ -539,7 +562,7 @@ console.log("city: the board counts the event, not the message");
   engine.destroy();
   // Ten single likes are ten likes, not forty.
   const engine2 = makeEngine();
-  for (let i = 0; i < 10; i++) engine2.handle(entry("like", `w${i}`, `w${i}`, "1"));
+  for (let i = 0; i < 10; i++) engine2.handle(entry("like", `w${i}`, `w${i}`, "x1"));
   check("ten single likes are ten", engine2.civic().mission.progress === 10,
     `(${engine2.civic().mission.progress})`);
   engine2.destroy();

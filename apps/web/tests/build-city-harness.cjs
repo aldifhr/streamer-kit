@@ -170,6 +170,26 @@ if (missing.length) {
   throw new Error(`not compiled, run \`npm run test:city\` first: ${missing.join(", ")}`);
 }
 
+// A compiled module that is older than its source is worse than a missing one,
+// because it is silent. The builder reads whatever `tsc` left behind, so calling
+// it directly after an edit produces a harness that is a whole engine behind,
+// still renders a convincing city, and disagrees with the source on exactly the
+// behaviour being looked at. That is not a hypothetical: it is how a shopfront
+// bug got diagnosed as a rendering bug when the shopfront code had never been
+// compiled. Checking the timestamps turns it into a failed command.
+const SRC = path.resolve(__dirname, "../lib/widgets/city");
+const stale = MODULES.filter((m) => {
+  const src = path.join(SRC, `${m}.ts`);
+  if (!fs.existsSync(src)) return false;
+  return fs.statSync(src).mtimeMs > fs.statSync(path.join(CACHE, `${m}.js`)).mtimeMs;
+});
+if (stale.length) {
+  throw new Error(
+    `stale build, \`npm run test:city\` to recompile: ${stale.join(", ")}. ` +
+      `The harness would otherwise run an older engine than the source.`,
+  );
+}
+
 // Every module the engine asks for has to be in the list above. Deriving it
 // from the sources rather than keeping the list by hand: adding a module to
 // `lib/widgets/city/` and forgetting the harness is the single easiest way to

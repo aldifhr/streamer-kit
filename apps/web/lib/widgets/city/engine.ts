@@ -308,8 +308,19 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         "#7da8ff",
       );
       escortMayor(m.id);
+      escortRetryIn = 0.5;
     },
   });
+  /**
+   * When the next attempt at staffing the convoy is due.
+   *
+   * Escorts are borrowed from the crowd, and the crowd is often mid-greeting or
+   * mid-activity at the exact moment a title changes hands. Asking once meant the
+   * occasional mayor arriving alone with an empty space beside the car, which
+   * read as a bug rather than as a crowd that was busy. So the ask repeats until
+   * it succeeds, and stops the moment it does.
+   */
+  let escortRetryIn = 0;
   let paradeQueue = 0, paradeCooldown = 0, bazaarUntil = 0, fireUntil = 0;
   /** Limos still owed, and how long until the next one is let out. */
   let limoQueue = 0, limoCooldown = 0;
@@ -500,8 +511,12 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * own layer to avoid this would cost a blit every frame forever to save a
    * rebuild that happens a handful of times an evening.
    */
+  let rebakeCount = 0;
+  let bakedOwners: ShopOwners | null = null;
   function rebakeCity(owners: ShopOwners) {
     if (!ready) return;
+    rebakeCount += 1;
+    bakedOwners = owners;
     layout = genCity(doc, LW, LH, SY0, SY1, owners);
     layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
     lastSkyUpdate = -1e9;
@@ -996,18 +1011,37 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * who arrives with two bodyguards out of nowhere is a sprite that appears from
    * nowhere, and the crowd is already there.
    */
-  function escortMayor(mayorId: string) {
+  function escortMayor(mayorId: string): boolean {
+    const held = [...people.values()].filter((p) => p.escortOf === mayorId);
+    if (held.length >= ESCORT) return true;
     const boss = [...people.values()].filter((p) => p.id !== mayorId && (p.state === "walk" || p.state === "idle"));
     const taken: string[] = [];
-    for (const p of boss) {
-      if (taken.length >= ESCORT) break;
-      if (greetingBusy.has(p.id) || p.activity !== "none" || p.spot) continue;
+    const claim = (p: Resident) => {
+      // Whoever is picked up stops what they were doing. A mayor who only ever
+      // recruits the idle draws a convoy out of the empty, and in a busy room
+      // that is most of the room, so the car would arrive alone.
       p.activity = "goto";
       p.escortOf = mayorId;
       p.spot = { x: p.x + (p.x < LW / 2 ? -6 : 6), y: p.y, room: 1 };
       p.actT = 999;
+      p.partnerId = null;
+      greetingBusy.delete(p.id);
       taken.push(p.id);
+    };
+
+    // First choice is someone with nothing to finish.
+    for (const p of boss) {
+      if (taken.length >= ESCORT - held.length) break;
+      if (greetingBusy.has(p.id) || p.activity !== "none" || p.spot) continue;
+      claim(p);
     }
+    // Then anyone at all who is on their feet, mid errand or not.
+    for (const p of boss) {
+      if (taken.length >= ESCORT - held.length) break;
+      if (p.spot || p.escortOf) continue;
+      claim(p);
+    }
+    return held.length + taken.length >= ESCORT;
   }
 
   /** Keeps the escort beside the car, and lets go when the title moves on. */
@@ -1232,6 +1266,31 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * a toast for a gift that did nothing. `count` is the fallback, and a gift
    * with neither is worth nothing rather than worth an arbitrary number.
    */
+  /**
+   * How many likes a single event stands for.
+   *
+   * The feed writes the run as `x${count}`, so `Number("x40")` is NaN and a
+   * plain `Number(value) || 1` silently turned every run of forty likes into one
+   * like — the city credited events, not likes, which is the opposite of what
+   * the board is for. The tests never caught it because they passed `"40"`
+   * rather than the `"x40"` the wire actually carries.
+   *
+   * Ordered the same way `giftValue` reads a diamond count: an explicit number
+   * first, then the count on the payload, then the digits inside the text.
+   */
+  function countValue(entry: Entry): number {
+    const direct = Number(entry.value);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const meta = Number(entry.meta?.count);
+    if (Number.isFinite(meta) && meta > 0) return meta;
+    const digits = /(\d[\d,]*)/.exec(String(entry.value ?? ""));
+    if (digits) {
+      const v = Number(digits[1].replace(/,/g, ""));
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+    return 1;
+  }
+
   function giftValue(meta: Record<string, unknown>, text: string): number {
     const raw = meta.diamonds ?? meta.diamondCount ?? meta.value;
     const n = Number(raw);
@@ -1273,7 +1332,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     // A like is worth the number of likes, not one. A run of x10 likes is ten
     // likes, and crediting the events instead of the value made the board
     // unreachable at any rate a room actually likes at.
-    if (goal === "likes") missions.credit("likes", Math.max(1, Number(entry.value) || 1));
+    if (goal === "likes") missions.credit("likes", Math.max(1, countValue(entry)));
     else if (goal === "comments" || goal === "joins") missions.credit(goal, 1);
     // Gifts are credited below, where the diamond value is known.
 
@@ -1287,7 +1346,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         break;
       }
       case "like": {
-        const n = clamp(Number(entry.value) || Number(entry.meta.count) || 1, 1, 15);
+        const n = clamp(countValue(entry), 1, 15);
         gainXP(p, n * 0.2);
         addHearts(p.x, p.y - 20, Math.min(n, 6));
         if (n >= 5) setEmote(p, "jump", 900);
@@ -1373,6 +1432,15 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
   function updateWorld(dt: number, now: number) {
     missions.update();
     syncMayorCar(now);
+    if (escortRetryIn > 0) {
+      escortRetryIn -= dt;
+      if (escortRetryIn <= 0) {
+        const m = mayor.current();
+        // Stop asking once the convoy is staffed, or once there is nobody to
+        // staff it with: an empty street should not be retried forever.
+        if (m && people.size > 1 && !escortMayor(m.id)) escortRetryIn = 0.5;
+      }
+    }
     for (let i = cars.length - 1; i >= 0; i--) {
       const c = cars[i];
       c.x += c.dir * c.speed * dt;
@@ -2009,7 +2077,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     SY1 = R(LH * 0.78);
     ROAD0 = SY1 + 6;
 
-    layout = genCity(doc, LW, LH, SY0, SY1, shops.owners());
+    bakedOwners = shops.owners();
+    layout = genCity(doc, LW, LH, SY0, SY1, bakedOwners);
     layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
     lastSkyUpdate = -1e9;
     for (const p of people.values()) {
@@ -2175,6 +2244,11 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     world() {
       return {
         shops: shops.list().map((sh) => ({ name: sh.name, diamonds: Math.round(sh.diamonds), slot: sh.slot })),
+        // What the baked layer was actually built from, which is not the same
+        // question as what the ranking says: the signs are pixels, and pixels
+        // only change when something re-bakes them.
+        bakedOwners: bakedOwners ? JSON.parse(JSON.stringify(bakedOwners)) : null,
+        rebakes: rebakeCount,
         weather: weather.state(),
         activities: [...people.values()].filter((p) => p.activity !== "none").map((p) => p.activity),
         wardrobe: [...people.values()].map((p) => ({ id: p.id, hat: p.cos.hat, bag: p.cos.bag, umbrella: p.cos.umbrella })),

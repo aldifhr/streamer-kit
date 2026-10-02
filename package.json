@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit -p apps/web/tsconfig.json",
     "test:astro-three": "tsc -p apps/web/tests/tsconfig.three.json && node apps/web/tests/astro-three.cjs",
     "test:astro-caps": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-caps.cjs",
-    "test:preview-fetch": "node apps/web/tests/preview-fetch.cjs"
+    "test:preview-fetch": "node apps/web/tests/preview-fetch.cjs",
+    "test:astro-motion": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-motion.cjs"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",

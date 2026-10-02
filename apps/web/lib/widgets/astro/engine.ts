@@ -96,6 +96,19 @@ export interface AstroEngine {
    * name plates and report a breach that was really just a busier frame.
    */
   effectCounts: () => { crates: number; asteroids: number; streaks: number; sparks: number };
+  /**
+   * Total simulated seconds the loop has stepped, and the wall-clock seconds it
+   * was given. The difference is time the frame loop threw away.
+   *
+   * Motion cannot be observed directly — a fade saturates and a wander has no
+   * target — so this is the measurement. A loop stepping by the gap since the
+   * previous tick that ran reports far less simulated time than wall time on any
+   * display that does not fill the budget, and that shortfall is the drift a
+   * viewer sees as motion that never quite arrives.
+   */
+  timeAccount: () => { simulated: number; wall: number };
+  /** The oldest astronaut's position, to assert a stall does not teleport it. */
+  astroPosition: () => { x: number; y: number };
   reset: () => void;
   destroy: () => void;
 }
@@ -1595,6 +1608,8 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
   const FRAME_BUDGET = 1000 / 60;
   let carry = 0;
   let last = performance.now();
+  let startedAt = last;
+  let simulatedSeconds = 0;
   let frame = 0;
   let running = false;
 
@@ -1608,12 +1623,22 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
     // A millisecond of slack, so a panel sitting a hair under the budget still
     // counts as a frame instead of being skipped forever.
     if (carry < FRAME_BUDGET - 1) return;
-    carry -= FRAME_BUDGET;
+    // The step is what `carry` has accumulated, not the gap since the last tick
+    // that ran. Those are different numbers, and using the wrong one made every
+    // astronaut move slower than real time on any display that could not hold
+    // 60fps — the gap since the previous tick is 16.7ms even when only every
+    // other tick ran, so each skip silently threw away a frame's worth of time
+    // and the drift compounded without ever recovering. `carry` is the time that
+    // is actually owed, so stepping by it is what makes the motion match the
+    // clock at 30Hz, at 144Hz, and on a display sitting in between.
+    const step = carry;
+    carry = 0;
     // A long stall — a hidden tab, a garbage collection — must not come back as a
-    // burst of catch-up frames.
-    if (carry < 0 || carry > FRAME_BUDGET) carry = 0;
-
-    const dt = Math.min(0.05, elapsed / 1000);
+    // burst of catch-up frames. The cap is generous enough to cover a couple of
+    // dropped frames but small enough that a ten-second stall does not teleport
+    // everything across the map.
+    const dt = Math.min(0.05, step / 1000);
+    simulatedSeconds += dt;
     const t = now / 1000;
 
     updateWorld(dt, now);
@@ -1750,6 +1775,13 @@ const levelFor = (xp: number) => Math.min(MAX_LEVEL, 1 + Math.floor(Math.sqrt(Ma
         streaks: streaks.length,
         sparks: sparks.length,
       };
+    },
+    timeAccount() {
+      return { simulated: simulatedSeconds, wall: (performance.now() - startedAt) / 1000 };
+    },
+    astroPosition() {
+      const first = astros.values().next();
+      return first.done || !first.value ? { x: 0, y: 0 } : { x: first.value.x, y: first.value.y };
     },
     reset() {
       store = {};

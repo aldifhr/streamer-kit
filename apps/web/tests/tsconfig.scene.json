@@ -4,15 +4,24 @@
     "rootDir": "..",
     "module": "commonjs",
     "target": "es2022",
-    "lib": ["es2022", "dom"],
+    "lib": [
+      "es2022",
+      "dom"
+    ],
     "jsx": "react-jsx",
     "strict": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "baseUrl": "..",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
-  "files": ["../lib/scene.ts", "../lib/widgets/registry.ts"]
+  "files": [
+    "../lib/scene.ts",
+    "../lib/widgets/registry.ts",
+    "../lib/editor/scene-load.ts"
+  ]
 }

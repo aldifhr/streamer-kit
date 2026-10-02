@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadedIdentity } from "./scene-load";
 import Link from "next/link";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { append, clock, summariseEvent, type LogLine } from "@/lib/socket-log";
@@ -193,13 +194,26 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
   }, [loading]);
 
   useEffect(() => {
+    // Everything belonging to the overlay being opened is cleared before the
+    // fetch, so the previous one cannot show through while this one loads, and
+    // so an overlay with no channel of its own ends up with no channel rather
+    // than the last one's handle. The log is per-overlay too: it is a record of
+    // what a particular stream sent, and carrying it over makes the new overlay
+    // look like it is already receiving events.
+    setUsername("");
+    setStatus("idle");
+    setError(null);
+    setLog([]);
+    setLoading(true);
     fetch(`/api/overlays/${overlayId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("not found"))))
       .then((data) => {
         const scene = oneWidget(normaliseScene(data.config), setSplitNotice);
         setConfig(scene);
         setSaved(scene);
-        if (data.username) setUsername(data.username);
+        const identity = loadedIdentity(data);
+        setUsername(identity.username);
+        setError(identity.error);
         setLoading(false);
       })
       .catch(() => {

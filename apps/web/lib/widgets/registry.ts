@@ -13,11 +13,8 @@ import { cityWidget } from "./city/widget";
 import { donationJarWidget } from "./donationjar";
 import { goalWidget } from "./goal";
 import { marathonWidget } from "./marathon";
-import { pollWidget } from "./poll";
-import { sessionStatsWidget } from "./sessionstats";
 import { socialWidget } from "./social";
 import { streaksWidget } from "./streaks";
-import { textWidget } from "./text";
 import { topGiftsWidget } from "./topgifts";
 import { viewersWidget } from "./viewers";
 import type { WidgetType } from "./types";
@@ -27,14 +24,11 @@ export const WIDGET_TYPES: Record<string, WidgetType> = {
   alerts: alertsWidget,
   viewers: viewersWidget,
   goal: goalWidget,
-  text: textWidget,
   astro: astroWidget,
   city: cityWidget,
   streaks: streaksWidget,
   "top-gifts": topGiftsWidget,
   marathon: marathonWidget,
-  "session-stats": sessionStatsWidget,
-  poll: pollWidget,
   "donation-jar": donationJarWidget,
   social: socialWidget,
 };
@@ -47,12 +41,9 @@ export const WIDGET_LIST: WidgetType[] = [
   cityWidget,
   viewersWidget,
   goalWidget,
-  textWidget,
   streaksWidget,
   topGiftsWidget,
   marathonWidget,
-  sessionStatsWidget,
-  pollWidget,
   donationJarWidget,
   socialWidget,
 ];

@@ -80,7 +80,11 @@ const empty = normaliseScene({
 check("a scene of only unknown types falls back to chat", countOf(empty, "chat") >= 1);
 
 console.log("a brand new widget is well formed");
-const w = makeWidget("poll");
+// Deliberately a type that is not registered. `makeWidget` reads its defaults
+// out of the registry with a fallback, so asking for a type nobody ships is the
+// honest version of "a widget that does not exist yet" — and it is what an
+// overlay saved with a widget this build does not have will ask for.
+const w = makeWidget("widget-that-does-not-exist");
 check("it has an id", typeof w.id === "string" && w.id.length > 0);
 check("it is enabled", w.enabled !== false);
 check("it is positioned inside the frame", w.x >= 0 && w.x <= 1 && w.y >= 0 && w.y <= 1);

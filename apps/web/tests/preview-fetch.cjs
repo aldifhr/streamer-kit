@@ -36,8 +36,13 @@ console.log("\nwidgets that address the API by overlay id honour it");
 // Only widgets that actually reach the network count. Several others interpolate
 // an id into a `localStorage` key — streaks, top gifts, the astronaut roster —
 // and those are not requests: a sample writes to its own throwaway key and never
-// leaves the browser. Only the poll calls the API, so only the poll can produce
-// the phantom 404 this whole change is about.
+// leaves the browser.
+//
+// The poll used to be the only caller here, so this suite could only check that
+// such a caller exists. With it gone the check inverts and gets sharper: no
+// widget should be building an API url from an overlay id at all, because the
+// phantom 404 this whole change is about was exactly that shape. A future widget
+// that starts doing it will fail here and have to prove it cannot.
 const sources = [];
 (function walk(dir) {
   for (const name of fs.readdirSync(dir)) {
@@ -52,7 +57,8 @@ const callers = sources.filter((f) => {
   const src = fs.readFileSync(f, "utf8");
   return /apiFetch\s*\(\s*[`"'][^`"']*\$\{/.test(src);
 });
-check("at least one widget fetches a url built from an id", callers.length > 0, `found ${callers.length}`);
+check("no widget builds an API url from an overlay id", callers.length === 0,
+  `${callers.length} still do: ${callers.map((f) => path.basename(f)).join(", ")}`);
 for (const f of callers) {
   const src = fs.readFileSync(f, "utf8");
   const rel = path.relative(web, f);

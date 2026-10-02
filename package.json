@@ -25,7 +25,6 @@
     "test:astro-fade": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-fade.cjs",
     "test:city": "tsc -p apps/web/tests/tsconfig.city.json && node apps/web/tests/city-engine.cjs",
     "test:jar": "tsc -p apps/web/tests/tsconfig.consume.json && node apps/web/tests/donation-jar.cjs",
-    "test:poll": "tsc -p apps/web/tests/tsconfig.consume.json && node apps/web/tests/poll-vote.cjs",
     "test:feed": "tsc -p apps/web/tests/tsconfig.feed.json && node apps/web/tests/feed-contract.cjs",
     "test:isolation": "apps/api/.venv/bin/python -u apps/api/tests/test_overlay_isolation.py",
     "test:editor": "tsc -p apps/web/tests/tsconfig.scene.json && node apps/web/tests/editor-scene-load.cjs",

@@ -1466,7 +1466,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         mayor.donate(p.id, p.name, d);
           savePerson(p);
           if (d >= SHOP_MIN) {
-          inspector.push("gift", `${p.name} punya toko — papan namanya tampil selama jadi rank 1`, now);
+          inspector.push("gift", `${p.name} punya toko — namanya jadi papan di deretan gedung`, now);
         }
         shops.donate(p.id, p.name, d);
         }
@@ -2408,6 +2408,11 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         // TikTok reports, the other is what the city has eased toward.
         audience: audienceShown,
         audienceReal,
+        // The limits in force right now. A city that will not grow is usually a
+        // city that has hit one of these, and the number you cannot see is the
+        // one that is doing it.
+        maxPeople: config.maxPeople,
+        leaveAfterMs: config.leaveAfterMs,
         // The decision log, for "why is the number not moving".
         notes: inspector.notes(),
         tally: inspector.tally(),

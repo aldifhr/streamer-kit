@@ -180,6 +180,7 @@ const { createCityEngine } = require(process.argv[2] || path.join(CACHE, "engine
 const { decorate } = require(path.join(CACHE, "cosmetics.js"));
 const { personParts } = require(path.join(CACHE, "sprites.js"));
 const { toConfig } = require(path.join(CACHE, "style.js"));
+const { audienceTier } = require(path.join(CACHE, "audience.js"));
 const DEFAULT_LABEL_TOP = 5;
 
 let failures = [];
@@ -240,7 +241,7 @@ function makeEngine(config = {}) {
 
 console.log("city: draws a frame");
 {
-  const engine = makeEngine();
+const engine = makeEngine();
   const before = drawCalls;
   runFrames(30);
   check("keeps drawing", drawCalls > before, `(drew ${drawCalls - before})`);
@@ -903,6 +904,31 @@ console.log("city: a full room still admits new viewers");
   check("the roster holds only the newest arrivals",
     engine.residents().every((r) => Number(r.id.slice(1)) >= 7),
     `(${engine.residents().map((r) => r.id).join(",")})`);
+  engine.destroy();
+}
+
+console.log("city: the city is sized by the room, not by its own bookkeeping");
+{
+  const engine = makeEngine();
+  // The room's own count, exactly as sources/tiktok.py sends it.
+  const viewers = (n) => engine.handle(entry("viewers", "v1", "v1", String(n), { count: n }));
+
+  viewers(500);
+  const big = engine.world();
+  check("a busy room reports its audience", big.audienceReal === 500, `got ${big.audienceReal}`);
+  check("and does not claim 500 residents", big.dissolve.length < 500,
+    `${big.dissolve.length} residents — the two numbers must not be conflated`);
+
+  // The skyline eases rather than snapping, so give it real time.
+  runFrames(2700);
+  check("the skyline catches up with the room", engine.world().audience > 490, `got ${engine.world().audience}`);
+
+  viewers(2);
+  check("and a room that empties is followed down", engine.world().audienceReal === 2, `got ${engine.world().audienceReal}`);
+  runFrames(2700);
+  check("down to nothing", engine.world().audience < 10, `got ${engine.world().audience}`);
+  check("an empty room is a kampung", audienceTier(engine.world().audience).name === "KAMPUNG",
+    `got ${audienceTier(engine.world().audience).name}`);
   engine.destroy();
 }
 

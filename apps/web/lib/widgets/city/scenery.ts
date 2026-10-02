@@ -254,6 +254,13 @@ function prop(doc: Document, type: Prop["type"], x: number, y: number): Prop {
 /** The whole scene, baked once per layout. */
 export interface CityLayers {
   far: HTMLCanvasElement;
+  /**
+   * Topmost y of the baked skyline.
+   *
+   * The engine reveals the backdrop from here downward according to the audience,
+   * so this is the ceiling the city can ever grow to.
+   */
+  farTop: number;
   mid: HTMLCanvasElement;
   ground: HTMLCanvasElement;
   sky: HTMLCanvasElement;
@@ -283,19 +290,29 @@ export function buildLayers(
   const skyCtx = sky.getContext("2d")!;
   const skyImg = skyCtx.createImageData(LW, SY1 + 2);
 
+  // The far skyline is baked once, taller than any audience will ever need, and
+  // then uncovered from the top as the room grows. Redrawing it per heartbeat
+  // would mean rebaking layers constantly; revealing it is free, and it is what
+  // lets the city grow in smooth steps instead of snapping between tiers.
+  const FAR_MAX = Math.floor(LH * 0.46);
   const far = mk(LW, SY0, doc);
+  let farTop = SY0;
   {
     const g = far.getContext("2d")!;
     const rnd = mulberry32(99 + LW);
     let x = 0;
     while (x < LW) {
-      const w = Math.min(LW - x, R(14 + rnd() * 18)), h = R(LH * (0.2 + rnd() * 0.2));
+      const w = Math.min(LW - x, R(14 + rnd() * 18));
+      // The tallest silhouette in the run sets how much is left to uncover, so
+      // the reveal is driven by the buildings rather than by a fixed band.
+      const h = R(FAR_MAX * (0.45 + rnd() * 0.55));
       g.fillStyle = "#8aa0c0";
       g.fillRect(x, SY0 - h, w, h);
       g.fillStyle = "#9db3d0";
       for (let yy = SY0 - h + 3; yy < SY0 - 4; yy += 6) {
         for (let xx = x + 2; xx < x + w - 2; xx += 5) g.fillRect(xx, yy, 1, 2);
       }
+      if (SY0 - h < farTop) farTop = SY0 - h;
       x += w;
     }
   }
@@ -374,5 +391,5 @@ export function buildLayers(
     }
   }
 
-  return { far, mid, ground, sky, skyCtx, cone, skyImg };
+  return { far, mid, ground, sky, skyCtx, cone, skyImg, farTop };
 }

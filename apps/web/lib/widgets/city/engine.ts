@@ -59,6 +59,7 @@ import type { MissionGoal } from "./missions";
 import { createMayor, ESCORT } from "./mayor";
 import { drawDecorations } from "./decor";
 import type { Weather } from "./weather";
+import { audienceGrowth, easeAudience, formatAudience } from "./audience";
 
 interface Resident {
   id: string;
@@ -513,6 +514,16 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    */
   let rebakeCount = 0;
   let bakedOwners: ShopOwners | null = null;
+  /**
+   * The room's own viewer count, and the value the city is actually drawn at.
+   *
+   * `audienceReal` is what TikTok reports on every heartbeat; `audienceShown` is
+   * what the skyline has eased toward. Keeping them apart is what stops the
+   * silhouette being rebuilt several times a second, and it is also why the HUD
+   * settles instead of flickering.
+   */
+  let audienceReal = 0;
+  let audienceShown = 0;
   function rebakeCity(owners: ShopOwners) {
     if (!ready) return;
     rebakeCount += 1;
@@ -1319,6 +1330,14 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       return;
     }
 
+    // The room's own count, straight from TikTok. Nothing derived from joins or
+    // idle timers: this is the only number here that cannot drift from reality.
+    if (entry.kind === "viewers") {
+      const n = Number(entry.meta?.count ?? entry.value);
+      if (Number.isFinite(n) && n >= 0) audienceReal = Math.round(n);
+      return;
+    }
+
     const isNew = !people.has(id);
     const p = ensurePerson(id, nick);
     if (isNew) addToast(`${nick} MASUK KOTA`, "#7dff9a");
@@ -1430,6 +1449,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * ------------------------------------------------------------------ */
 
   function updateWorld(dt: number, now: number) {
+    audienceShown = easeAudience(audienceShown, audienceReal, dt);
     missions.update();
     syncMayorCar(now);
     if (escortRetryIn > 0) {
@@ -1804,8 +1824,20 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
 
     if (!config.transparent) {
       const off = R((t * 1.2) % LW);
-      g.drawImage(layers.far, -off, 0);
-      g.drawImage(layers.far, LW - off, 0);
+      // The skyline is baked taller than any audience needs and uncovered from
+      // the top, so growth costs a clip rectangle rather than a rebake.
+      {
+        // Only the revealed band is blitted, rather than clipping the whole
+        // layer. Same picture, and no clip state to save and restore on a frame
+        // that has a budget to keep to.
+        const grow = audienceGrowth(audienceShown);
+        const cut = Math.round(layers.farTop + (SY0 - layers.farTop) * (1 - grow));
+        if (SY0 - cut > 0) {
+          const band = SY0 - cut;
+          g.drawImage(layers.far, 0, cut, LW, band, -off, cut, LW, band);
+          g.drawImage(layers.far, 0, cut, LW, band, LW - off, cut, LW, band);
+        }
+      }
       g.drawImage(layers.mid, 0, 0);
       drawDoors(g, now);
       g.drawImage(layers.ground, 0, SY0, LW, LH - SY0, 0, SY0, LW, LH - SY0);
@@ -2005,7 +2037,10 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     const hh = Math.floor((TOD * 24 + 6) % 24);
     const mm = Math.floor(((TOD * 24 + 6) % 1) * 60);
     const clock = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-    const head = `KOTA ${people.size}${totalDiamonds ? `  DIAMOND ${totalDiamonds}` : ""}  ${clock}`;
+    // The audience first, because that is the room; the resident count second,
+    // because that is the cast. They are different numbers and used to be
+    // conflated into one.
+    const head = `${formatAudience(audienceShown, people.size)}${totalDiamonds ? `  DIAMOND ${totalDiamonds}` : ""}  ${clock}`;
     plateOn(g, 3, 3, head.length * 4 - 1 + 6, 11, PLATE);
     txtOn(g, head, 6, 6, "#ffffff");
 
@@ -2243,6 +2278,11 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     },
     world() {
       return {
+        // The room's count and the value the skyline is drawn at, exposed
+        // together because the gap between them is the whole point: one is what
+        // TikTok reports, the other is what the city has eased toward.
+        audience: audienceShown,
+        audienceReal,
         shops: shops.list().map((sh) => ({ name: sh.name, diamonds: Math.round(sh.diamonds), slot: sh.slot })),
         // What the baked layer was actually built from, which is not the same
         // question as what the ranking says: the signs are pixels, and pixels

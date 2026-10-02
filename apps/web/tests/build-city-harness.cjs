@@ -33,6 +33,7 @@ const OUT = process.argv[3] || "/root/.hermes/cache/scratch/city-harness.html";
  */
 const MODULES = [
   "config",
+  "audience",
   "font",
   "sprites",
   "scenery",

@@ -1,3 +1,16 @@
+/**
+ * Which feed entries reach the engine, and in what order.
+ *
+ * The buffers here are built by replaying the feed's own line —
+ * `setEntries((prev) => [entry, ...prev].slice(0, BUFFER_MAX))` — rather than
+ * written out by hand. The previous version of this file spelled its buffers
+ * oldest first, which is the one shape the feed never produces, and so it
+ * agreed with an implementation that had the order exactly backwards: tests
+ * green, every scene frozen at whatever was on screen when it mounted. A
+ * hand-written literal cannot catch that class of mistake; a producer replayed
+ * through the same code path can.
+ */
+
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
@@ -16,37 +29,63 @@ function check(label, cond, detail = "") {
 }
 
 const seq = (n) => ({ seq: n });
-const run = (buf, consumed) => takeNew(buf, consumed);
 
-console.log("a first pass hands over everything");
-// The common case on a page that has just loaded: the buffer is already full of
-// history and none of it has been seen.
+/** The feed's buffer, capped the way the feed caps it. */
+const BUFFER_MAX = 50;
+function feed(...ns) {
+  let buf = [];
+  for (const n of ns) buf = [seq(n), ...buf].slice(0, BUFFER_MAX);
+  return buf;
+}
+/** One message at a time, the way a socket delivers them. */
+function next(buf, n) {
+  return [seq(n), ...buf].slice(0, BUFFER_MAX);
+}
+const run = (buf, consumed) => takeNew(buf, consumed);
+const order = (fresh) => fresh.map((e) => e.seq).join(",");
+
+console.log("a first pass hands over everything, oldest first");
 {
-  const buf = [seq(1), seq(2), seq(3)];
-  const { fresh, consumed } = run(buf, 0);
-  check("every entry is new", fresh.length === 3, JSON.stringify(fresh));
+  const { fresh, consumed } = run(feed(1, 2, 3), 0);
+  check("every entry is new", fresh.length === 3, order(fresh));
+  check("in the order it happened", order(fresh) === "1,2,3", order(fresh));
   check("the marker ends on the newest", consumed === 3, `got ${consumed}`);
 }
 
 console.log("a re-render hands over nothing");
-// Any re-render that is not a new message — a resize, a style change, a parent
-// state change — runs this effect again. Replaying the buffer on those is what
-// awarded XP again for the same comment.
 {
-  const buf = [seq(1), seq(2), seq(3)];
+  const buf = feed(1, 2, 3);
   const first = run(buf, 0);
   const second = run(buf, first.consumed);
-  check("nothing is replayed", second.fresh.length === 0, JSON.stringify(second.fresh));
+  check("nothing is replayed", second.fresh.length === 0, order(second.fresh));
   check("the marker does not move", second.consumed === 3, `got ${second.consumed}`);
 }
 
-console.log("only what is new is handed over");
+console.log("messages arriving one at a time all arrive");
+// The shape of a live room. This is what failed in production: the first
+// message was handed over and every message after it was dropped, so the city
+// kept the one resident it had when the widget mounted and never grew again.
 {
-  const buf = [seq(1), seq(2), seq(3), seq(4), seq(5)];
-  const first = run(buf, 0);
-  const grown = [...buf, seq(6), seq(7)];
-  const second = run(grown, first.consumed);
-  check("only the two new entries", second.fresh.map((e) => e.seq).join() === "6,7", JSON.stringify(second.fresh.map((e) => e.seq)));
+  let buf = [];
+  let consumed = 0;
+  const seen = [];
+  for (let n = 1; n <= 12; n++) {
+    buf = next(buf, n);
+    const r = run(buf, consumed);
+    consumed = r.consumed;
+    seen.push(...r.fresh.map((e) => e.seq));
+  }
+  check("all twelve arrive", seen.join(",") === "1,2,3,4,5,6,7,8,9,10,11,12", seen.join(","));
+  check("each arrives exactly once", new Set(seen).size === 12, `${new Set(seen).size} distinct`);
+}
+
+console.log("a burst arriving between renders all arrive");
+// React batches, so several messages can land in the buffer between two
+// renders. Whatever arrived while it was busy still has to be delivered.
+{
+  const first = run(feed(1, 2, 3, 4, 5), 0);
+  const second = run(feed(1, 2, 3, 4, 5, 6, 7), first.consumed);
+  check("only the two new entries", order(second.fresh) === "6,7", order(second.fresh));
   check("the marker follows", second.consumed === 7, `got ${second.consumed}`);
 }
 
@@ -55,42 +94,54 @@ console.log("a trimmed buffer still works");
 // marker is behind the oldest retained entry, everything retained is new — and a
 // marker that failed to advance would replay the whole buffer forever.
 {
-  const trimmed = [seq(41), seq(42), seq(43), seq(44)];
+  const trimmed = feed(41, 42, 43, 44);
   const { fresh, consumed } = run(trimmed, 12);
-  check("a marker behind the buffer yields the whole buffer", fresh.length === 4, JSON.stringify(fresh.length));
+  check("a marker behind the buffer yields the whole buffer", fresh.length === 4, order(fresh));
+  check("still oldest first", order(fresh) === "41,42,43,44", order(fresh));
   check("the marker jumps to the newest", consumed === 44, `got ${consumed}`);
 }
 
-console.log("a marker exactly at the oldest yields the rest");
+console.log("a long busy room keeps up and stops replaying");
 {
-  const buf = [seq(10), seq(11), seq(12)];
-  const { fresh } = run(buf, 10);
-  check("seq 10 is not new", fresh.map((e) => e.seq).join() === "11,12", JSON.stringify(fresh.map((e) => e.seq)));
+  let buf = [];
+  let consumed = 0;
+  let handed = 0;
+  for (let n = 1; n <= 400; n++) {
+    buf = next(buf, n);
+    const r = run(buf, consumed);
+    consumed = r.consumed;
+    handed += r.fresh.length;
+  }
+  check("every one of 400 was handed over once", handed === 400, `${handed} handed over`);
+  const idle = run(buf, consumed);
+  check("and a re-render afterwards replays nothing", idle.fresh.length === 0, order(idle.fresh));
 }
 
-console.log("the old arithmetic, shown to be wrong");
-// This is the bug: advancing on the *oldest* retained entry, which is what the
-// widget used to do. It looks correct on the first pass and diverges on the
-// second, which is exactly why it was never noticed.
+console.log("a marker exactly at a retained entry yields the rest");
+{
+  const { fresh } = run(feed(10, 11, 12), 10);
+  check("seq 10 is not new", order(fresh) === "11,12", order(fresh));
+}
+
+console.log("the old arithmetic, shown to be wrong against a real buffer");
+// The implementation this replaced read its marker off the last element. Under
+// a prepend that is the oldest retained entry, so the scan matched on the very
+// first comparison and the engine was handed nothing after the opening pass.
 {
   const oldWay = (buf, consumed) => {
     let start = buf.length - 1;
     while (start >= 0 && buf[start].seq > consumed) start--;
-    const fresh = buf.slice(start + 1);
-    const next = buf.length ? Math.max(consumed, buf[0].seq) : consumed;
-    return { fresh, consumed: next };
+    return { fresh: buf.slice(start + 1), consumed: Math.max(consumed, buf[0].seq) };
   };
-  const buf = [seq(1), seq(2), seq(3), seq(4), seq(5)];
+  const buf = feed(1, 2, 3, 4, 5);
   const a = oldWay(buf, 0);
-  check("old: first pass is fine", a.fresh.length === 5, JSON.stringify(a.fresh.length));
-  check("old: but the marker lags on the oldest", a.consumed === 1, `got ${a.consumed}`);
-
+  check("old: the first pass looks fine", a.fresh.length === 5, order(a.fresh));
   const b = oldWay(buf, a.consumed);
-  check("old: so the second pass replays four entries", b.fresh.length === 4, `got ${b.fresh.length} — each replay awards XP again`);
+  check("old: and then it stops delivering entirely", b.fresh.length === 0, `${b.fresh.length} — the room stopped growing`);
 
   const fixed = run(buf, 0);
-  const fixedAgain = run(buf, fixed.consumed);
-  check("new: the second pass replays nothing", fixedAgain.fresh.length === 0, `got ${fixedAgain.fresh.length}`);
+  check("new: a re-render hands over nothing", run(buf, fixed.consumed).fresh.length === 0);
+  check("new: because a later entry does arrive", order(run(feed(1, 2, 3, 4, 5, 6), fixed.consumed).fresh) === "6");
 }
 
 console.log("degenerate inputs do not throw");
@@ -99,11 +150,13 @@ console.log("degenerate inputs do not throw");
 {
   check("an empty buffer is a no-op", run([], 0).fresh.length === 0);
   check("an empty buffer keeps the marker", run([], 7).consumed === 7, `got ${run([], 7).consumed}`);
-  check("one entry is handed over", run([seq(1)], 0).fresh.length === 1);
-  check("nothing new on a single held entry", run([seq(1)], 1).fresh.length === 0);
+  check("one entry is handed over", run(feed(1), 0).fresh.length === 1);
+  check("nothing new on a single held entry", run(feed(1), 1).fresh.length === 0);
+  check("a marker past the newest yields nothing", run(feed(1), 99).fresh.length === 0);
 }
 
 console.log();
+assert.equal(typeof takeNew, "function");
 if (process.exitCode) {
   console.log("FAILED");
 } else {

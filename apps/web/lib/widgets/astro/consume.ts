@@ -9,12 +9,21 @@
  * rest. The engine must therefore be told "everything I have not seen", and the
  * only durable marker for that is the highest sequence number handled so far.
  *
- * It used to advance on `entries[0].seq` instead. `entries[0]` is the *oldest*
- * entry still in the buffer, not the newest, so the marker trailed a long way
- * behind: after handling 1..5 it read 1, and the next render replayed 2..8.
- * Every replay called `handle()` again, and `handle()` awards XP — so a busy
- * room paid out the same comment several times over, in proportion to how long
- * the buffer took to fill. Nothing looked broken, which is why it survived.
+ * The buffer is **newest first**. `setEntries` prepends, so `entries[0]` is the
+ * most recent message and `entries[entries.length - 1]` is the oldest still
+ * retained.
+ *
+ * That ordering was the bug this file existed to fix, and it fixed it backwards.
+ * It scanned from the end and read its marker off the last element, which under
+ * a prepend is the oldest: after a first pass the marker sat on the oldest
+ * entry, so the scan matched it immediately, `fresh` came back empty, and the
+ * engine was never told about anything again. Nothing threw. The room simply
+ * stopped growing — the city froze at the one resident present when the widget
+ * mounted, and every scene using this helper did the same.
+ *
+ * The tests agreed with the bug because they built their buffers oldest first,
+ * so they exercised a shape the feed never produces. Both sides have to be the
+ * real order for this to mean anything.
  *
  * Isolated here so the arithmetic can be tested without a canvas, a socket or a
  * room. The cases that matter are the ones the ring buffer creates: entries
@@ -35,15 +44,15 @@ export interface Sequenced {
 export function takeNew<T extends Sequenced>(entries: T[], consumed: number): { fresh: T[]; consumed: number } {
   if (!entries.length) return { fresh: [], consumed };
 
-  // The buffer is normally ordered, so this is a binary search in all but name.
-  // Scanning from the end is deliberate: on a re-render with no new entries it
-  // stops immediately, and a busy room replays nothing.
-  let start = entries.length - 1;
-  while (start >= 0 && entries[start].seq > consumed) start--;
+  // Walk forward from the newest while the entry has not been seen. On a
+  // re-render with no new messages the very first comparison ends the walk, so
+  // a busy room replays nothing.
+  let i = 0;
+  while (i < entries.length && entries[i].seq > consumed) i++;
 
-  const fresh = entries.slice(start + 1);
-  // The newest handled, not the oldest retained. Taking `entries[0]` here is what
-  // made every later render replay the whole buffer.
-  const newest = entries[entries.length - 1].seq;
+  // Handed over oldest first: the engine applies effects in the order they
+  // happened, and reversing a newest-first buffer is what puts them back.
+  const fresh = entries.slice(0, i).reverse();
+  const newest = entries[0].seq;
   return { fresh, consumed: Math.max(consumed, newest) };
 }

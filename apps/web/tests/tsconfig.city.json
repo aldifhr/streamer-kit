@@ -13,5 +13,5 @@
       "@/*": ["./*"]
     }
   },
-  "files": ["../lib/widgets/city/engine.ts"]
+  "files": ["../lib/widgets/city/engine.ts", "../lib/widgets/city/style.ts"]
 }

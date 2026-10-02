@@ -17,38 +17,8 @@ import type { CityEngine } from "./config";
 import { DEFAULT_CITY_CONFIG } from "./config";
 import type { CityConfig } from "./config";
 import type { WidgetProps, WidgetType } from "../types";
+import { toConfig } from "./style";
 
-function toConfig(style: Record<string, string | number | boolean | undefined>): Partial<CityConfig> {
-  const n = (k: string, d: number) => {
-    const v = Number(style[k]);
-    return Number.isFinite(v) ? v : d;
-  };
-  const b = (k: string, d: boolean) => (style[k] === undefined ? d : Boolean(style[k]));
-  return {
-    maxPeople: n("max-people", DEFAULT_CITY_CONFIG.maxPeople),
-    leaveAfterMs: n("leave-after", 300) * 1000,
-    dayLen: n("day-len", DEFAULT_CITY_CONFIG.dayLen),
-    // A toggle rather than a number, because midnight is a legitimate hour to
-    // pin and `0` used to mean both "midnight" and "not pinned": every city came
-    // up locked at 00:00 and the day cycle never ran.
-    fixedTime: b("pin-hour", false) ? n("pinned-hour", 0.3) : null,
-    rankXP: [0, 20, 80],
-    labelTop: n("label-top", DEFAULT_CITY_CONFIG.labelTop),
-    labelActiveMs: n("label-active", 10) * 1000,
-    badWords: String(style["bad-words"] ?? DEFAULT_CITY_CONFIG.badWords.join(","))
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-    pixelSize: n("pixel-size", 0),
-    transparent: b("transparent", false),
-    showHud: b("show-hud", true),
-    showLabels: b("show-labels", true),
-    cityName: String(style["city-name"] ?? ""),
-    partyGift: n("party-gift", 500),
-    planeGift: n("plane-gift", 100),
-    storeKey: "city_pixel_v1",
-  };
-}
 
 function City({ style, entries, sceneId }: WidgetProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -142,7 +112,7 @@ export const cityWidget: WidgetType = {
     {
       title: "Roster",
       controls: [
-        { kind: "number", key: "max-people", label: "Max residents", min: 1, max: 45 },
+        { kind: "number", key: "max-people", label: "Max residents", min: 16, max: 45 },
         { kind: "range", key: "leave-after", label: "Leave after", min: 30, max: 900, step: 30, suffix: "s" },
       ],
     },

@@ -135,7 +135,16 @@ global.localStorage = {
   removeItem: (k) => store.delete(k),
 };
 
-let clock = 0;
+/**
+ * The harness clock, started where a browser one would be.
+ *
+ * It used to start at 0, which is fine for anything measured against ticks and
+ * silently wrong for anything measured against `performance.now()`: the idle
+ * timer compares the two, so `tick - handle` came out negative and no resident
+ * could ever time out. The leave timer is exactly the field that shipped broken,
+ * and this is why no test could see it.
+ */
+let clock = typeof performance === "object" ? performance.now() : 0;
 global.performance = { now: () => clock };
 
 // Timer handles are modelled, not just collected: a bare setInterval in the
@@ -170,6 +179,8 @@ const CACHE = path.resolve(__dirname, "../../../node_modules/.cache/stream-kit/c
 const { createCityEngine } = require(process.argv[2] || path.join(CACHE, "engine.js"));
 const { decorate } = require(path.join(CACHE, "cosmetics.js"));
 const { personParts } = require(path.join(CACHE, "sprites.js"));
+const { toConfig } = require(path.join(CACHE, "style.js"));
+const DEFAULT_LABEL_TOP = 5;
 
 let failures = [];
 function check(label, cond, detail = "") {
@@ -586,6 +597,71 @@ console.log("city: the mayor has a car and two people walking beside it");
   engine.destroy();
 }
 
+console.log("city: a blank setting is not a zero");
+{
+  // Every numeric field in the editor is unset by being blank. `Number("")` is 0
+  // rather than NaN, so a blank one used to arrive as a zero, and a zero leave
+  // timer is the whole city blinking: residents cleared the idle timer on the
+  // next frame and were replaced by the next join. The city read as five people
+  // flickering while thirty-two were in the room.
+  const cfg = toConfig({});
+  check("an empty style gets the default leave timer", cfg.leaveAfterMs === 300e3, `(${cfg.leaveAfterMs})`);
+  check("and the default roster", cfg.maxPeople === 45, `(${cfg.maxPeople})`);
+  for (const blank of ["", null, undefined]) {
+    const c = toConfig({ "leave-after": blank, "max-people": blank, "label-top": blank });
+    check(`blank stays blank, not zero (${JSON.stringify(blank)})`,
+      c.leaveAfterMs === 300e3 && c.maxPeople === 45 && c.labelTop === DEFAULT_LABEL_TOP,
+      `(leave ${c.leaveAfterMs}, max ${c.maxPeople}, top ${c.labelTop})`);
+  }
+  // A real value still wins, including a deliberate zero for a toggle-like field.
+  check("a real value still wins", toConfig({ "leave-after": 45 }).leaveAfterMs === 45e3,
+    `(${toConfig({ "leave-after": 45 }).leaveAfterMs})`);
+  check("and so does an explicit zero", toConfig({ "leave-after": 0 }).leaveAfterMs === 0,
+    `(${toConfig({ "leave-after": 0 }).leaveAfterMs})`);
+  // A real value still wins for the timer, which a room may want short on
+  // purpose. The roster is different: the reference hardcodes 45 and a city of
+  // zero is not a setting, it is a bug with a number attached.
+  check("a zero roster is floored rather than obeyed", toConfig({ "max-people": 0 }).maxPeople >= 16,
+    `(${toConfig({ "max-people": 0 }).maxPeople})`);
+  // And the engine agrees: a long timer keeps a silent resident in the city.
+  const engine = makeEngine({ leaveAfterMs: 300e3 });
+  engine.handle(entry("join", "q", "q", ""));
+  runFrames(60 * 4);
+  check("a silent resident stays for the whole timer", engine.residentCount() === 1,
+    `(${engine.residentCount()} after 4s)`);
+  engine.destroy();
+  // The same room with a zero timer puts everybody on their way out at once,
+  // which is the blinking: they do not vanish, they walk off, and the next join
+  // walks on, forever. Nobody is ever standing still long enough to read as a
+  // resident of the city.
+  const blink = makeEngine({ leaveAfterMs: 0 });
+  // A comment, not a join: the idle timer only applies to someone already out
+  // walking, and a resident who has just come through a door is still in the
+  // entry animation with a target they take a while to reach.
+  blink.handle(entry("comment", "q", "q", "halo"));
+  runFrames(30);
+  // Nobody is ever settled. A door arrival is still coming through the door and
+  // an edge arrival is already walking back out; neither reaches the walk or idle
+  // state that a resident of the city is supposed to spend its time in.
+  const states = blink.world().dissolve.map((x) => x.state);
+  check("a zero timer settles nobody", states.every((s) => s !== "walk" && s !== "idle"),
+    `(${states.join(",")})`);
+  blink.destroy();
+}
+
+console.log("city: the editor cannot configure the city into uselessness")
+{
+  const at = toConfig;
+  // The reference overlay hardcodes 45 with no setting at all. Ours is editable,
+  // so the editing has to be unable to produce a room too small to read as one.
+  check("a room of five is not a city", at({ "max-people": 5 }).maxPeople >= 16,
+    `(got ${at({ "max-people": 5 }).maxPeople})`);
+  check("and the cap still holds at the top", at({ "max-people": 999 }).maxPeople === 45,
+    `(got ${at({ "max-people": 999 }).maxPeople})`);
+  check("an unset room is the full reference size", at({}).maxPeople === 45,
+    `(got ${at({}).maxPeople})`);
+}
+
 console.log("city: residents do things");
 {
   const engine = makeEngine();
@@ -713,7 +789,10 @@ console.log("city: a shower arrives, and leaves");
   }
   check("it rains when told to", seen[0] === "rain", `(${seen.join(" -> ")})`);
   check("then it clears", seen.includes("rainbow"), `(${seen.join(" -> ")})`);
-  check("and comes back to dry", seen[seen.length - 1] === "dry", `(${seen.join(" -> ")})`);
+  // Not "the last state is dry": 26s of rain and 14s of rainbow is 40s, and by
+  // 50s the room can be into the next shower already. What matters is that the
+  // sky came back round, not where it happened to be when the window closed.
+  check("and comes back to dry", seen.includes("dry"), `(${seen.join(" -> ")})`);
   check("and the city is still running after all of it", (runFrames(5), drawCalls > 0));
   engine.destroy();
 }

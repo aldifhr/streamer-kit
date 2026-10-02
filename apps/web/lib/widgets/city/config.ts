@@ -81,6 +81,18 @@ export interface CityEngine {
   effectCounts: () => { coins: number; hearts: number; confetti: number; sparks: number };
   /** Vehicles on the road, and how many are of each type. */
   vehicles: () => { total: number; byType: Record<string, number> };
+  /** Forces the weather, for the editor control and for tests. */
+  weather: (kind: "dry" | "rain" | "after" | "rainbow") => void;
+  /** The effect queue: what is on stage, what is waiting, what was refused. */
+  staging: () => { active: string | null; waiting: number; refused: number };
+  /** Shopfront ownership, the weather, what people are doing and what they wear. */
+  world: () => {
+    shops: { name: string; diamonds: number; slot: number }[];
+    weather: string;
+    activities: string[];
+    wardrobe: { id: string; hat: number; bag: boolean; umbrella: boolean }[];
+    dissolve: { id: string; d: number; state: string }[];
+  };
   /** Total simulated seconds stepped against the wall clock it was given. */
   timeAccount: () => { simulated: number; wall: number };
   /** Resident counts keyed by stable user id, for the editor's inspector. */

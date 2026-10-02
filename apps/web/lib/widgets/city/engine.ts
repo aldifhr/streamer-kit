@@ -35,6 +35,7 @@ import {
   levelFor,
 } from "./sprites";
 import type { Emote, Look, Part, Pose } from "./sprites";
+import type { Activity } from "./activities";
 import {
   buildLayers,
   drawPartsOn,
@@ -44,7 +45,16 @@ import {
   txtOn,
   txtOutlineOn,
 } from "./scenery";
-import type { CityLayout, Ctx, Door, Sprite } from "./scenery";
+import type { CityLayout, Ctx, Door, ShopOwners, Sprite } from "./scenery";
+import { NO_COS, cosFor, decorate, isCos } from "./cosmetics";
+import type { Cos } from "./cosmetics";
+import { buildLocal, pickLocalType, speedFor, trailsConfetti } from "./local";
+import { createShops, SHOP_SLOTS } from "./shops";
+import { createActivities } from "./activities";
+import type { Spot } from "./activities";
+import { createStaging, stagedKindFor } from "./staging";
+import { createWeather, drawPuddles, drawRain, drawRainWash, drawRainbow } from "./weather";
+import type { Weather } from "./weather";
 
 interface Resident {
   id: string;
@@ -61,6 +71,18 @@ interface Resident {
   t: number;
   speed: number;
   state: "enter" | "walk" | "idle" | "exit";
+  /** What they are doing when they are not walking. */
+  activity: Activity;
+  /** Seconds left in the current activity. */
+  actT: number;
+  /** Where an activity takes them, or null. */
+  spot: Spot | null;
+  /** The other resident they are greeting, if any. */
+  partnerId: string | null;
+  /** The wardrobe their gifts bought. */
+  cos: Cos;
+  /** Diamonds they have given, which is what a shopfront and a hat are for. */
+  given: number;
   tx: number;
   ty: number;
   wait: number;
@@ -106,6 +128,9 @@ interface StoreRecord {
   rank: number;
   badge: boolean;
   friends: number;
+  /** Total diamonds given, kept so the wardrobe and the shop survive a reload. */
+  given?: number;
+  cos?: Cos;
 }
 
 /**
@@ -176,10 +201,66 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
   const dissolveCv = mk(26, 30, doc);
   const dissolveCtx = dissolveCv.getContext("2d", { willReadFrequently: true })!;
   const carCache = new Map<string, Sprite>();
+  const localCache = new Map<string, Sprite>();
   const glowCache = new Map<number, HTMLCanvasElement>();
+
+  /**
+   * The scene's residents hold their wardrobe and their diamonds on their own
+   * record, and the shopfronts are the one piece of state that is not per-person:
+   * it belongs to the row of buildings, so it lives here and is re-baked into the
+   * layer whenever the ranking changes.
+   */
+  const shops = createShops({
+    max: SHOP_SLOTS,
+    onChanged: (owners: ShopOwners) => {
+      // The signs are baked into the building layer, so a change of owner means
+      // the layer has to be built again. Rare, and cheaper than drawing the
+      // whole row live every frame.
+      rebakeCity(owners);
+    },
+  });
+
+  const activities = createActivities({
+    spots: () => ({
+      bench: layout.props.filter((q) => q.type === "bench").map((q) => ({ x: q.x, y: q.y - 1, room: 2 })),
+      shop: layout.buildings
+        .filter((b) => b.x > 0 && b.x < LW)
+        .slice(0, 8)
+        .map((b) => ({ x: clamp(b.x + b.w / 2, 6, LW - 6), y: SY0 + 3, room: 1 })),
+      shelter: layout.props.filter((q) => q.type === "busstop").map((q) => ({ x: q.x, y: q.y - 1, room: 3 })),
+    }),
+    greetRange: () => 10,
+  });
+
+  /**
+   * The staged effects.
+   *
+   * A gift over the bar does not fire anything here: it goes on this queue and
+   * runs when the stage is free. A run of them used to land in the same second
+   * and read as a still frame.
+   */
+  const staging = createStaging({
+    max: 12,
+    run: (effect) => beginStaged(effect.kind, effect.by, effect.amount),
+    onRefused: (_kind, total) => {
+      addToast(`ANTREAN PENUH  +${Math.round(total)}`, "#ff8a8a");
+    },
+  });
+
+  const weather = createWeather({
+    LW: () => LW,
+    LH: () => LH,
+    SY1: () => SY1,
+    ROAD0: () => ROAD0,
+    lamps: () => layout.props.filter((q) => q.type === "lamp").map((q) => ({ x: q.x, y: q.y })),
+    onLightning: () => {
+      shake(0.2, 1);
+    },
+  });
 
   let totalDiamonds = 0, flashUntil = 0, shakeUntil = 0, shakeAmp = 0;
   let partyUntil = 0, searchUntil = 0, todOffset = 0, nextCar = 0;
+  let paradeQueue = 0, paradeCooldown = 0, bazaarUntil = 0, fireUntil = 0;
   /** Limos still owed, and how long until the next one is let out. */
   let limoQueue = 0, limoCooldown = 0;
   /** Where the day starts when nothing has pinned it. */
@@ -358,6 +439,85 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
   }
 
   /* ---------------------------------------------------------------------
+   * shopfronts
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Rebuilds the building layer so a viewer's name appears on a sign.
+   *
+   * Only the sign plates change, but they are baked into the same canvas as a
+   * hundred buildings' worth of walls, and splitting the signs out into their
+   * own layer to avoid this would cost a blit every frame forever to save a
+   * rebuild that happens a handful of times an evening.
+   */
+  function rebakeCity(owners: ShopOwners) {
+    if (!ready) return;
+    layout = genCity(doc, LW, LH, SY0, SY1, owners);
+    layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
+    lastSkyUpdate = -1e9;
+  }
+
+  /* ---------------------------------------------------------------------
+   * staged effects
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Starts one staged effect.
+   *
+   * Each of these is the thing a big gift is supposed to look like, and they run
+   * one at a time. The parade lets its vehicles out on the queue's cadence rather
+   * than all at once, which is the same reason the road is not a solid line.
+   */
+  function beginStaged(kind: "party" | "plane" | "parade" | "bazaar" | "fire" | "storm", by: string, amount: number) {
+    const now = performance.now();
+    const who = people.get(by);
+    if (kind === "party") {
+      partyUntil = now + 9000;
+      flashUntil = now + 250;
+      shake(1.2, 2);
+      if (who) {
+        who.rank = 2;
+        who.xp = Math.max(who.xp, config.rankXP[2] ?? 0);
+        savePerson(who);
+        spotlight(who, 6);
+        setEmote(who, "dance", 4000);
+      }
+      for (const p of people.values()) {
+        if (p.state === "walk" || p.state === "idle") setEmote(p, Math.random() < 0.5 ? "cheer" : "clap", 4000);
+      }
+      // Staggered, and bounded: the rockets are the frame's most expensive
+      // effect and twelve of them at once is twelve of them at once.
+      for (let i = 0; i < 8; i++) launchRocket(0.4 + i * 0.7);
+      addConfetti(90, true);
+    } else if (kind === "plane") {
+      launchPlane(`TERIMA KASIH ${by}!`);
+      addConfetti(70, true);
+      searchUntil = now + 7000;
+      shake(0.5, 1);
+      for (let i = 0; i < 4; i++) launchRocket(0.6 + i * 0.8);
+    } else if (kind === "parade") {
+      // The procession: a fire engine or a limo every second and a half, so it
+      // is a parade rather than a traffic jam.
+      for (let i = 0; i < 5; i++) paradeQueue = Math.max(paradeQueue, i + 1);
+      paradeCooldown = 0;
+      if (who) {
+        spotlight(who, 5);
+        setEmote(who, "dance", 4000);
+      }
+      shake(0.25, 1);
+    } else if (kind === "bazaar") {
+      bazaarUntil = now + 11000;
+      addConfetti(40, true);
+    } else if (kind === "fire") {
+      fireUntil = now + 9000;
+      shake(0.8, 2);
+    } else if (kind === "storm") {
+      weather.force("rain");
+    }
+    void amount;
+  }
+
+  /* ---------------------------------------------------------------------
    * residents
    * ------------------------------------------------------------------ */
 
@@ -381,6 +541,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       rank: p.rank,
       badge: p.badge,
       friends: p.friends.length,
+      given: p.given,
+      cos: p.cos,
     };
     storeDirty = true;
   }
@@ -454,7 +616,15 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       state: "walk", tx: 0, ty: 0, wait: 0, moving: false,
       enterT: 0, exitPhase: 0, exitT: 0, exitMode: "edge", door: null,
       lastActive: performance.now(), bubble: "", bubbleUntil: 0, emote: null, dissolve: 1,
+      activity: "none", actT: rand(1, 8), spot: null, partnerId: null,
+      cos: isCos(rec.cos) ? rec.cos : cosFor(rec.given || 0),
+      given: rec.given || 0,
     };
+    // A returning viewer keeps their shop and their hat, so the gifts that put
+    // them there do not have to be re-sent.
+    for (const sh of shops.list()) {
+      if (sh.id === key) shops.donate(sh.id, sh.name, 0);
+    }
     for (let i = 0; i < (rec.friends || 0); i++) p.friends.push(newFriend(p, i, true));
     // Door or street: 70% through a door in the original. Kept, because a city
     // where everyone walks in from off-frame reads as an empty backdrop.
@@ -477,7 +647,15 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       p.tx = clamp(rand(20, LW - 20), 10, LW - 10);
       p.ty = p.y;
       p.dir = left ? 1 : -1;
-      p.dissolve = 0;
+      // Solid from the first frame, unlike the door.
+      //
+      // Walking in from off the edge of the screen has nothing to dissolve out
+      // of, and setting `dissolve` to 0 here left them at zero for good: the
+      // enter branch is what walks `dissolve` up to 1, and it only runs while
+      // the state is "enter", which this path never set. So every resident who
+      // arrived at the kerb rather than through a door was drawn through the
+      // dissolve buffer at zero threshold, which is to say not drawn at all.
+      p.dissolve = 1;
     }
     people.set(key, p);
     sparkle(p.x, p.y - 8, 10, "#9dffb0");
@@ -614,6 +792,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       }
     }
 
+    updateActivity(p, dt, now);
+
     if ((p.state === "walk" || p.state === "idle") && now - p.lastActive > config.leaveAfterMs) startExit(p);
 
     // Step around each other. Cheap, and it stops the crowd stacking into one
@@ -641,6 +821,150 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       } else f.moving = false;
     });
   }
+
+  /**
+   * What a resident does when they are not walking.
+   *
+   * Two things take priority over a chosen activity: rain, and having somebody
+   * to say hello to. Rain first, because a person standing at a bench in a
+   * downpour is the one thing that would look wrong, and a greeting is worth
+   * abandoning an errand for.
+   */
+  function updateActivity(p: Resident, dt: number, now: number) {
+    if (p.state !== "walk" && p.state !== "idle") return;
+
+    // Rain, unless they are already somewhere dry.
+    if (weather.isWet() && p.activity !== "shelter") {
+      const sh = activities.shelter(p);
+      if (sh && p.activity === "none") {
+        p.activity = "goto";
+        p.spot = sh;
+        p.actT = 12;
+        return;
+      }
+    }
+    if (p.activity === "shelter" && !weather.isWet()) {
+      p.activity = "none";
+      p.spot = null;
+      p.actT = 0;
+    }
+
+    // A greeting, if somebody is standing right there.
+    if (p.activity === "none" && rand(0, 1) < dt * 0.12) {
+      const other = activities.partner(p, people.values(), greetingBusy);
+      if (other) {
+        const mate = people.get(other);
+        if (mate) {
+          p.activity = "goto";
+          p.partnerId = other;
+          p.spot = { x: mate.x + (mate.x > p.x ? 5 : -5), y: mate.y, room: 1 };
+          p.actT = 6;
+          greetingBusy.add(other);
+          mate.activity = "goto";
+          mate.partnerId = p.id;
+          mate.spot = { x: p.x - (p.x > mate.x ? 5 : -5), y: p.y, room: 1 };
+          mate.actT = 6;
+          greetingBusy.add(p.id);
+          return;
+        }
+      }
+    }
+
+    if (p.activity === "none") {
+      p.actT -= dt;
+      if (p.actT <= 0) {
+        const want = activities.choose();
+        if (want === "phone") {
+          // A phone is something you do while walking, so it needs no trip.
+          p.activity = "phone";
+          p.actT = rand(4, 12);
+        } else {
+          const spot = activities.spotFor(want, takenSpots);
+          if (spot) {
+            p.activity = "goto";
+            p.spot = spot;
+            p.actT = 10;
+            takenSpots.add(spot);
+          } else {
+            p.actT = 2;
+          }
+        }
+      }
+      return;
+    }
+
+    if (p.activity === "goto") {
+      const target = p.spot;
+      if (!target) {
+        releaseActivity(p);
+        return;
+      }
+      p.tx = clamp(target.x, 4, LW - 4);
+      p.ty = clamp(target.y, SY0 + 2, SY1);
+      if (stepToward(p, dt, p.speed)) {
+        p.moving = false;
+        p.actT -= dt;
+        if (p.actT <= 0) {
+          // Two people crossing to each other and *then* talking reads as a
+          // conversation. Two people talking on opposite sides of the road
+          // does not, which is why the greeting is a destination.
+          if (p.partnerId) {
+            setEmote(p, "wave", 1200);
+            const mate = people.get(p.partnerId);
+            if (mate) {
+              setEmote(mate, "wave", 1200);
+              mate.partnerId = null;
+              greetingBusy.delete(mate.id);
+            }
+            releaseActivity(p);
+          } else {
+            // Settled: on a bench, at a shop, or out of the rain.
+            p.activity = p.spot === activities.shelter(p) ? "shelter" : p.spot ? "sit" : "none";
+            p.actT = p.spot ? rand(3, 9) : 0;
+            if (!p.spot) {
+              p.activity = "none";
+              p.actT = rand(2, 9);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // Sitting, eating, sheltering, on the phone: just counting down.
+    p.moving = false;
+    p.actT -= dt;
+    if (p.actT <= 0) releaseActivity(p);
+  }
+
+  /** The activity that changes how somebody is drawn, or null. */
+  function activityPose(p: Resident): "sit" | "eat" | "phone" | null {
+    if (p.activity === "sit" || p.activity === "eat" || p.activity === "phone") return p.activity;
+    return null;
+  }
+
+  /** Ends whatever a resident was doing and clears the bookkeeping with it. */
+  function releaseActivity(p: Resident) {
+    if (p.spot) takenSpots.delete(p.spot);
+    if (p.partnerId) {
+      const mate = people.get(p.partnerId);
+      if (mate) {
+        mate.partnerId = null;
+        greetingBusy.delete(mate.id);
+        releaseActivity(mate);
+      }
+      p.partnerId = null;
+    }
+    greetingBusy.delete(p.id);
+    p.spot = null;
+    p.activity = "none";
+    p.actT = rand(2, 9);
+  }
+
+  /** The spots currently claimed, so two people do not sit on the same bench. */
+  const takenSpots = new Set<Spot>();
+  /** The residents currently walking somewhere to meet somebody. */
+  const greetingBusy = new Set<string>();
 
   /* ---------------------------------------------------------------------
    * vehicles
@@ -701,6 +1025,18 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
 
   const CAR_COLORS = ["#d84a4a", "#4a7ad8", "#3aa86a", "#e8e8f0", "#2a2a3a", "#8a5ad8", "#e07a2a"];
 
+  /** Types drawn by `local.ts` rather than by the generic car builder. */
+  const LOCAL_TYPES = new Set(["ojek", "angkot", "becak", "bakso", "firetruck"]);
+
+  function localCanvas(type: string, dir: number): Sprite {
+    const key = type + dir;
+    const hit = localCache.get(key);
+    if (hit) return hit;
+    const built = buildLocal(doc, type, dir) as Sprite;
+    localCache.set(key, built);
+    return built;
+  }
+
   /**
    * Puts a vehicle on the road, if there is room for it.
    *
@@ -715,7 +1051,9 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     const color =
       type === "taxi" ? "#f0c030" : type === "bus" ? "#e0a030" :
       type === "limo" ? "#e8c040" : CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
-    const cv = carCanvas(type, color, dir);
+    // The local vehicles carry their own colours inside their sprite, so the
+    // traffic mix reads as a street rather than as a palette.
+    const cv = LOCAL_TYPES.has(type) ? localCanvas(type, dir) : carCanvas(type, color, dir);
     const rh = LH - ROAD0;
     const base = dir > 0 ? ROAD0 + R(rh * 0.42) : ROAD0 + R(rh * 0.84);
     const x = dir > 0 ? -cv.width - 4 : LW + 4;
@@ -729,7 +1067,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     }
     cars.push({
       cv, dir, type, x, base,
-      speed: rand(26, 44) * (type === "bus" ? 0.8 : 1),
+      speed: speedFor(type, rand(26, 44) * (type === "bus" ? 0.8 : 1)),
       ph: rand(0, 6),
       nextConf: 0,
     });
@@ -841,8 +1179,20 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         const d = giftValue(entry.meta, entry.value);
         totalDiamonds += d;
         gainXP(p, Math.max(1, d * 0.5));
+
+        // What the gift bought, before anything is shown for it. The wardrobe
+        // and the shopfront are the permanent part; the fireworks are the part
+        // that has to wait its turn.
+        if (d > 0) {
+          p.given += d;
+          p.cos = cosFor(p.given);
+          savePerson(p);
+          shops.donate(p.id, p.name, d);
+        }
+
         const label = clean(String(entry.meta.giftName ?? entry.value ?? "gift"));
-        addToast(`${nick} KIRIM ${label}${Number(entry.meta.count) > 1 ? ` X${entry.meta.count}` : ""}`, "#ffd23f");
+        const count = Number(entry.meta.count) || 1;
+        addToast(`${nick} KIRIM ${label}${count > 1 ? ` X${count}` : ""}`, "#ffd23f");
         if (d > 0) floatText(`+${d}`, p.x, p.y - 30, "#ffd23f");
 
         if (d < 10) {
@@ -851,41 +1201,25 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
           break;
         }
 
-        if (p.rank < 2) {
-          p.rank++;
-          p.xp = Math.max(p.xp, config.rankXP[p.rank] ?? 0);
-          savePerson(p);
-        }
-        spotlight(p, 5);
-        setEmote(p, "dance", 4000);
-        addCoins(p, 14);
-        launchRocket(0);
-        launchRocket(0.5);
-        launchRocket(1);
-        shake(0.25, 1);
-
-        if (d >= config.planeGift) {
-          launchPlane(`TERIMA KASIH ${nick}!`);
-          addConfetti(90, true);
-          searchUntil = now + 7000;
-          shake(0.5, 1);
-          for (let i = 0; i < 4; i++) launchRocket(1 + i * 0.6);
-          for (const o of people.values()) {
-            if (o !== p && Math.abs(o.x - p.x) < 80 && o.state !== "exit") setEmote(o, "clap", 3000);
+        // Under the plane threshold but still generous: this one is immediate,
+        // because a spotlight and some coins do not stack into anything.
+        if (d < config.planeGift) {
+          if (p.rank < 1) {
+            p.rank = 1;
+            p.xp = Math.max(p.xp, config.rankXP[1] ?? 0);
+            savePerson(p);
           }
+          spotlight(p, 5);
+          setEmote(p, "dance", 4000);
+          addCoins(p, 14);
+          launchRocket(0);
+          shake(0.25, 1);
+          break;
         }
-        if (d >= config.partyGift) {
-          p.rank = 2;
-          p.xp = Math.max(p.xp, config.rankXP[2] ?? 0);
-          savePerson(p);
-          partyUntil = now + 9000;
-          flashUntil = now + 250;
-          shake(1.2, 2);
-          cheerAll(6000);
-          limoQueue = Math.min(limoQueue + 1, LIMO_QUEUE_CAP);
-          for (let i = 0; i < 12; i++) launchRocket(1.5 + i * 0.55);
-          addConfetti(140, true);
-        }
+
+        // At or over it, the gift is staged rather than fired.
+        const kind = stagedKindFor(d, config.planeGift, config.partyGift) ?? "parade";
+        staging.push(kind, p.id, d, now);
         break;
       }
       default:
@@ -903,7 +1237,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     for (let i = cars.length - 1; i >= 0; i--) {
       const c = cars[i];
       c.x += c.dir * c.speed * dt;
-      if (c.type === "limo") {
+      if (trailsConfetti(c.type)) {
         c.nextConf -= dt;
         if (c.nextConf <= 0) {
           c.nextConf = 0.07;
@@ -914,16 +1248,28 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     }
     nextCar -= dt;
     if (nextCar <= 0 && !config.transparent) {
-      spawnCar();
-      nextCar = rand(1.8, 5);
+      // A local street, not a car park: ojeks, angkot, becaks and a bakso cart
+      // share the road with the sedans.
+      spawnCar(pickLocalType(Math.random));
+      nextCar = rand(1.4, 4.2);
     }
     // The procession is let out over time rather than all at once, so a burst of
-    // gifts reads as a parade instead of a wall.
-    limoCooldown -= dt;
-    if (limoQueue > 0 && limoCooldown <= 0) {
-      if (spawnCar("limo", 1)) limoQueue -= 1;
-      limoCooldown = LIMO_GAP;
+    // gifts reads as a parade instead of a wall. A staged parade replaces the
+    // old per-gift queue entirely: the effect queue decides that a parade is
+    // happening, and this is the cadence it happens at.
+    if (paradeQueue > 0) {
+      paradeCooldown -= dt;
+      if (paradeCooldown <= 0) {
+        const kind = now < fireUntil ? "firetruck" : "limo";
+        if (spawnCar(kind, 1)) paradeQueue -= 1;
+        paradeCooldown = LIMO_GAP;
+      }
     }
+
+    // The weather runs on its own clock, and the staging queue decides when a
+    // staged effect takes the stage.
+    weather.update(dt, now);
+    staging.update(now);
 
     for (let i = coins.length - 1; i >= 0; i--) {
       const c = coins[i];
@@ -1112,10 +1458,29 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
    * does not crawl as they walk. The original anchored it to the frame, which
    * made a moving sprite shimmer as the pattern shifted under it.
    */
-  function drawDissolved(g: Ctx, look: Look, rank: number, pose: Pose, fx: number, fy: number, dir: number, k: number) {
+  function drawDissolved(
+    g: Ctx,
+    look: Look,
+    rank: number,
+    pose: Pose,
+    fx: number,
+    fy: number,
+    dir: number,
+    k: number,
+    cos: Cos,
+  ) {
     const X0 = fx - 13, Y0 = fy - 22;
     dissolveCtx.clearRect(0, 0, 26, 30);
-    drawPartsOn(dissolveCtx, personParts(look, rank, pose), 13 - 4 + (pose.dx || 0), 22 - 15 + (pose.dy || 0), dir < 0);
+    // The dissolve buffer has to grow room for a hat and an umbrella, which sit
+    // above the head. Without this the canopy was clipped off and tier three
+    // looked like tier two whenever they dissolved.
+    drawPartsOn(
+      dissolveCtx,
+      decorate(personParts(look, rank, pose), cos, pose, weather.isWet()),
+      13 - 4 + (pose.dx || 0),
+      22 - 15 + (pose.dy || 0),
+      dir < 0,
+    );
     const id = dissolveCtx.getImageData(0, 0, 26, 30);
     const d = id.data;
     for (let y = 0; y < 30; y++) {
@@ -1128,10 +1493,32 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     g.drawImage(dissolveCv, X0, Y0);
   }
 
-  function drawPersonAt(g: Ctx, look: Look, rank: number, pose: Pose, fx: number, fy: number, dir: number) {
-    g.fillStyle = "rgba(0,0,0,.28)"; g.fillRect(fx - 3, fy, 7, 1);
-    g.fillStyle = "rgba(0,0,0,.16)"; g.fillRect(fx - 2, fy + 1, 5, 1);
-    drawPartsOn(g, personParts(look, rank, pose), fx - 4 + (pose.dx || 0), fy - 15 + (pose.dy || 0), dir < 0);
+  function drawPersonAt(
+    g: Ctx,
+    look: Look,
+    rank: number,
+    pose: Pose,
+    fx: number,
+    fy: number,
+    dir: number,
+    cos: Cos,
+  ) {
+    // No shadow under someone who is sitting on a bench, and none under an
+    // umbrella either: a shadow that ignores what the person is doing is worse
+    // than no shadow.
+    if (pose.kind !== "sit" && !cos.umbrella) {
+      g.fillStyle = "rgba(0,0,0,.28)";
+      g.fillRect(fx - 3, fy, 7, 1);
+      g.fillStyle = "rgba(0,0,0,.16)";
+      g.fillRect(fx - 2, fy + 1, 5, 1);
+    }
+    drawPartsOn(
+      g,
+      decorate(personParts(look, rank, pose), cos, pose, weather.isWet()),
+      fx - 4 + (pose.dx || 0),
+      fy - 15 + (pose.dy || 0),
+      dir < 0,
+    );
   }
 
   function drawPlane(g: Ctx, t: number) {
@@ -1176,12 +1563,12 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     }
     for (const p of people.values()) {
       const fx = R(p.x), fy = R(p.y);
-      const pose = poseOf(p.moving, p.t, p.emote, now);
+      const pose = poseOf(p.moving, p.t, p.emote, now, activityPose(p));
       drawables.push({
         y: p.y,
         fn: () => {
-          if (p.dissolve < 1) drawDissolved(g, p.look, p.rank, pose, fx, fy, p.dir, p.dissolve);
-          else drawPersonAt(g, p.look, p.rank, pose, fx, fy, p.dir);
+          if (p.dissolve < 1) drawDissolved(g, p.look, p.rank, pose, fx, fy, p.dir, p.dissolve, p.cos);
+          else drawPersonAt(g, p.look, p.rank, pose, fx, fy, p.dir, p.cos);
         },
       });
       p.friends.forEach((f) => {
@@ -1191,8 +1578,8 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
         drawables.push({
           y: f.y,
           fn: () => {
-            if (k < 1) drawDissolved(g, f.look, 0, fpose, ffx, ffy, f.dir, k);
-            else drawPersonAt(g, f.look, 0, fpose, ffx, ffy, f.dir);
+            if (k < 1) drawDissolved(g, f.look, 0, fpose, ffx, ffy, f.dir, k, NO_COS);
+            else drawPersonAt(g, f.look, 0, fpose, ffx, ffy, f.dir, NO_COS);
           },
         });
       });
@@ -1227,7 +1614,14 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     for (const s of layout.signs) {
       const on = now < partyUntil || Math.floor(t * 2 + s.ph) % 9 !== 0;
       if (!on) continue;
-      const col = now < partyUntil ? `hsl(${Math.floor((t * 120 + s.ph * 40) % 360)},95%,65%)` : s.color;
+      // A viewer's shopfront does not take the party's cycling colour. It is the
+      // one sign in the row that means a specific person, so it stays legible as
+      // a name rather than becoming a light show.
+      const col = s.owned
+        ? s.color
+        : now < partyUntil
+          ? `hsl(${Math.floor((t * 120 + s.ph * 40) % 360)},95%,65%)`
+          : s.color;
       plateOn(g, s.x, s.y, s.w, 7, "#1c1830");
       txtOn(g, s.text, s.x + 2, s.y + 1, col);
     }
@@ -1467,7 +1861,7 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     SY1 = R(LH * 0.78);
     ROAD0 = SY1 + 6;
 
-    layout = genCity(doc, LW, LH, SY0, SY1);
+    layout = genCity(doc, LW, LH, SY0, SY1, shops.owners());
     layers = buildLayers(doc, layout, LW, LH, SY0, SY1, ROAD0);
     lastSkyUpdate = -1e9;
     for (const p of people.values()) {
@@ -1543,9 +1937,33 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     mainCtx.save();
     mainCtx.translate(sx, sy);
     mainCtx.drawImage(sc, 0, 0);
+    // Weather sits between the city and its people: the road is wet first, then
+    // the residents put their umbrellas up, and the puddles come before the
+    // residents rather than under them.
+    drawPuddles(
+      mainCtx,
+      weather.full(),
+      weather.puddles(),
+      now,
+      layout.props.filter((q) => q.type === "lamp").map((q) => ({ x: q.x, y: q.y })),
+      nightF(),
+    );
     drawLights(mainCtx, now, t);
     drawEffects(mainCtx, now, t);
     if (config.showLabels) drawLabels(mainCtx, now);
+    drawRain(mainCtx, weather.drops(), weather.full().phase);
+    drawRainbow(mainCtx, weather.full(), LW, SY0);
+    drawRainWash(mainCtx, weather.full(), LW, LH);
+    // Lightning goes over everything, including the rain: the whole frame goes
+    // white for a moment, which is the only way it reads as lightning rather
+    // than as a lamp.
+    const flash = weather.flash(now);
+    if (flash > 0) {
+      mainCtx.globalAlpha = clamp(flash, 0, 1) * 0.55;
+      mainCtx.fillStyle = "#e8ecff";
+      mainCtx.fillRect(0, 0, LW, LH);
+      mainCtx.globalAlpha = 1;
+    }
     mainCtx.restore();
     if (config.showHud) drawHud(mainCtx, now);
   };
@@ -1586,6 +2004,20 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       }
     },
     residentCount: () => people.size,
+    weather: (k: Weather) => weather.force(k),
+    staging() {
+      const a = staging.active();
+      return { active: a ? a.kind : null, waiting: staging.waiting(), refused: staging.refused() };
+    },
+    world() {
+      return {
+        shops: shops.list().map((sh) => ({ name: sh.name, diamonds: Math.round(sh.diamonds), slot: sh.slot })),
+        weather: weather.state(),
+        activities: [...people.values()].filter((p) => p.activity !== "none").map((p) => p.activity),
+        wardrobe: [...people.values()].map((p) => ({ id: p.id, hat: p.cos.hat, bag: p.cos.bag, umbrella: p.cos.umbrella })),
+        dissolve: [...people.values()].map((p) => ({ id: p.id, d: Number(p.dissolve.toFixed(2)), state: p.state })),
+      };
+    },
     vehicles() {
       const byType: Record<string, number> = {};
       for (const c of cars) byType[c.type] = (byType[c.type] || 0) + 1;

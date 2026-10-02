@@ -43,16 +43,49 @@ const describe = (id) => {
   return c ? `${id}(${c.width}x${c.height})` : String(id);
 };
 
+/**
+ * Recorded fillRects, so a test can ask what was actually painted and where.
+ *
+ * Off unless a test asks for it, and capped when it is on. Recording every
+ * rectangle unconditionally ran the process out of memory: the weather test
+ * simulates half an hour at 60fps, and every frame paints thousands of
+ * rectangles. A recording that only fits the tests that do not want it is not
+ * a recording.
+ */
+const OPS_CAP = 200000;
+let recordOps = false;
+const opsById = new Map();
+function opsFor(id) {
+  if (!opsById.has(id)) opsById.set(id, []);
+  return opsById.get(id);
+}
+/** Turns recording on for one test and forgets everything recorded before it. */
+function captureOps() {
+  recordOps = true;
+  opsById.clear();
+  return () => {
+    recordOps = false;
+  };
+}
+
 function makeContext(id) {
   const noop = () => {
     drawCalls++;
   };
-  return {
+  // Declared first so fillRect can read the live fillStyle: the caller keeps a
+  // reference to the context and assigns `ctx.fillStyle` between calls, and it
+  // does not call through the object, so `this` is not available here.
+  const ctx = {
     fillStyle: "",
     globalAlpha: 1,
     globalCompositeOperation: "source-over",
     imageSmoothingEnabled: true,
-    fillRect: noop,
+    fillRect: (x, y, w, h) => {
+      drawCalls++;
+      if (!recordOps) return;
+      const ops = opsFor(id);
+      if (ops.length < OPS_CAP) ops.push({ op: "fillRect", x, y, w, h, color: ctx.fillStyle });
+    },
     drawImage: (src) => {
       drawCalls++;
       imageDraws++;
@@ -76,6 +109,7 @@ function makeContext(id) {
       return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h };
     },
   };
+  return ctx;
 }
 
 function makeCanvas(doc) {
@@ -132,10 +166,10 @@ global.document = fakeDocument;
 
 /* ---------------------------------------------------------- harness ---- */
 
-const { createCityEngine } = require(
-  process.argv[2] ||
-    path.resolve(__dirname, "../../../node_modules/.cache/stream-kit/city/lib/widgets/city/engine.js"),
-);
+const CACHE = path.resolve(__dirname, "../../../node_modules/.cache/stream-kit/city/lib/widgets/city");
+const { createCityEngine } = require(process.argv[2] || path.join(CACHE, "engine.js"));
+const { decorate } = require(path.join(CACHE, "cosmetics.js"));
+const { personParts } = require(path.join(CACHE, "sprites.js"));
 
 let failures = [];
 function check(label, cond, detail = "") {
@@ -163,8 +197,28 @@ function runFrames(count, stepMs = 16) {
 }
 
 /** Builds an engine, sizes it, and returns it. */
+/**
+ * Every engine must be destroyed before the next one is built.
+ *
+ * The rAF handles live in one module-level map that `runFrames` drains, so an
+ * engine that was not destroyed keeps ticking inside every later test. It looks
+ * like the new engine misbehaving — a leaked engine caught mid-parade supplies
+ * confetti to a test that gave no gifts — and it makes the suite flaky rather
+ * than wrong, which is worse, because it passes until it does not.
+ */
+/** The scene canvas of the most recent engine: the one people are drawn on. */
+let sceneCanvas = null;
+
 function makeEngine(config = {}) {
-  const engine = createCityEngine({ canvas: makeCanvas(fakeDocument), config });
+  if (frameHandles.size) {
+    throw new Error(`${frameHandles.size} engine(s) still holding a frame; a test did not destroy`);
+  }
+  // Taken before the engine allocates its scratch buffers: the scene canvas is
+  // the first one it is handed, and picking it out by "largest id" picks a
+  // 36x240 strip buffer instead, which is how a test ends up measuring nothing.
+  const canvas = makeCanvas(fakeDocument);
+  sceneCanvas = canvas;
+  const engine = createCityEngine({ canvas, config });
   engine.resize(1280, 720);
   // Two frames so the layout is live and the sky has been drawn at least once.
   runFrames(3);
@@ -294,6 +348,27 @@ console.log("city: transients expire");
   engine.destroy();
 }
 
+console.log("city: nothing celebrates on its own");
+{
+  const engine = makeEngine();
+  // A minute of ordinary traffic with nobody giving anything. Confetti is a
+  // celebration, so it must not appear at all here — and a vehicle that trails
+  // it as part of ordinary traffic produces a steady drizzle of it forever,
+  // which a short test can miss by luck of when the traffic spawned.
+  let worst = 0;
+  for (let i = 0; i < 60 * 60; i++) {
+    runFrames(1, 16);
+    worst = Math.max(worst, engine.effectCounts().confetti);
+  }
+  check("no confetti without a gift", worst === 0, `(worst ${worst})`);
+  const seen = engine.vehicles().byType;
+  check("and traffic really was moving", Object.keys(seen).length > 0, `(${JSON.stringify(seen)})`);
+  // The parade car must not be in the ordinary traffic mix. It trails confetti,
+  // so this is the assertion that stops a celebration from becoming the weather.
+  check("no parade car in ordinary traffic", !seen.limo, `(${JSON.stringify(seen)})`);
+  engine.destroy();
+}
+
 console.log("city: transients stay under a ceiling");
 {
   const engine = makeEngine();
@@ -306,6 +381,268 @@ console.log("city: transients stay under a ceiling");
   const total = c.coins + c.hearts + c.confetti + c.sparks;
   check("sprite count is bounded", total <= 1500, `(${total} sprites: ${JSON.stringify(c)})`);
   check("the city still draws", (runFrames(2), drawCalls > 0));
+  engine.destroy();
+}
+
+console.log("city: big gifts queue instead of piling up");
+{
+  const engine = makeEngine({ planeGift: 100, partyGift: 500 });
+  // Sixty large gifts in one second. The point is not that they are refused —
+  // it is that they are not all on screen at once.
+  for (let i = 0; i < 60; i++) {
+    engine.handle(entry("gift", `g${i}`, `g${i}`, "Lion", { diamonds: 999, count: 1 }));
+  }
+  // The first effect starts on the next update, not on the push: the queue is
+  // advanced with the world, so a burst that arrives inside one frame still
+  // resolves to a single staged effect.
+  runFrames(1, 16);
+  const justQueued = engine.staging();
+  check("one effect is on stage", justQueued.active !== null, `(${justQueued.active})`);
+  check("the rest are waiting, not firing", justQueued.waiting > 0, `(${justQueued.waiting} waiting)`);
+  // And the queue is bounded, with the overflow counted rather than dropped
+  // silently.
+  check("the queue is bounded", justQueued.waiting + justQueued.refused > 0, `(refused ${justQueued.refused})`);
+  const first = justQueued.active;
+  runFrames(30, 16);
+  check("the stage does not change mid-effect", engine.staging().active === first, `(${engine.staging().active})`);
+  engine.destroy();
+}
+
+console.log("city: the stage clears and the next one starts");
+{
+  const engine = makeEngine({ planeGift: 100, partyGift: 500 });
+  engine.handle(entry("gift", "a", "a", "Lion", { diamonds: 999, count: 1 }));
+  engine.handle(entry("gift", "b", "b", "Lion", { diamonds: 999, count: 1 }));
+  runFrames(1, 16);
+  check("one on stage, one waiting", engine.staging().active !== null && engine.staging().waiting === 1,
+    `(${JSON.stringify(engine.staging())})`);
+  // The longest effect is eleven seconds; twelve is comfortably past it.
+  runFrames(60 * 12, 16);
+  check("it hands over", engine.staging().waiting === 0, `(${JSON.stringify(engine.staging())})`);
+  engine.destroy();
+}
+
+console.log("city: gifts buy a wardrobe that outlives the reload");
+{
+  const engine = makeEngine({ planeGift: 100, partyGift: 500 });
+  // 1500 rather than 999: the top tier starts at a thousand, and 999 landing one
+  // tier down is the threshold working, not a rounding error.
+  engine.handle(entry("gift", "budi", "budi-1", "Lion", { diamonds: 1500, count: 1 }));
+  const w = engine.world().wardrobe.find((x) => x.id === "budi-1");
+  check("a gift over a thousand buys the top tier", w && w.hat === 3 && w.umbrella, `(${JSON.stringify(w)})`);
+  engine.handle(entry("gift", "rudi", "rudi-1", "Galaxy", { diamonds: 300, count: 1 }));
+  const mid = engine.world().wardrobe.find((x) => x.id === "rudi-1");
+  check("three hundred buys a hat and a bag but not an umbrella",
+    mid && mid.hat === 2 && mid.bag && !mid.umbrella, `(${JSON.stringify(mid)})`);
+  engine.handle(entry("gift", "sari", "sari-1", "Rose", { diamonds: 5, count: 1 }));
+  const small = engine.world().wardrobe.find((x) => x.id === "sari-1");
+  check("a small gift buys nothing", small && small.hat === 0 && !small.bag, `(${JSON.stringify(small)})`);
+
+  engine.destroy();
+}
+
+console.log("city: top gifters get a shopfront with their name on it");
+{
+  const engine = makeEngine({ planeGift: 100, partyGift: 500 });
+  engine.handle(entry("gift", "budi", "budi-1", "Lion", { diamonds: 300, count: 1 }));
+  engine.handle(entry("gift", "sari", "sari-1", "Lion", { diamonds: 120, count: 1 }));
+  engine.handle(entry("gift", "tomi", "tomi-1", "Rose", { diamonds: 9, count: 1 }));
+  const shops = engine.world().shops;
+  check("two shopfronts are owned, not three", shops.length === 2, `(${shops.length})`);
+  // Stored as given; the board itself is uppercased when it is drawn.
+  check("the bigger spender is ranked first", shops[0] && shops[0].name.toUpperCase() === "BUDI",
+    `(${shops.map((s) => s.name).join(",")})`);
+  check("the two are on different shopfronts", shops[0] && shops[1] && shops[0].slot !== shops[1].slot,
+    `(slots ${shops.map((s) => s.slot).join(",")})`);
+  // Nine diamonds does not earn a sign. On a floor of zero, one rose put a
+  // viewer's name on a building, which made the most visible status in the
+  // scene mean nothing.
+  const names = shops.map((x) => x.name.toUpperCase());
+  check("a nine diamond viewer has no shopfront", !names.includes("TOMI"), `(${names.join(",")})`);
+  // Rank is by total given, not arrival order: the first one to arrive is not
+  // automatically the biggest.
+  engine.handle(entry("gift", "budi", "budi-1", "Rose", { diamonds: 400, count: 1 }));
+  const after = engine.world().shops;
+  check("rank follows the total, not the order", after[0] && after[0].name.toUpperCase() === "BUDI",
+    `(${after.map((x) => x.name).join(",")})`);
+  engine.destroy();
+}
+
+console.log("city: a shopfront keeps its slot through a resize");
+{
+  const engine = makeEngine({ planeGift: 100, partyGift: 500 });
+  engine.handle(entry("gift", "budi", "budi-1", "Lion", { diamonds: 300, count: 1 }));
+  const before = engine.world().shops[0];
+  engine.resize(900, 600);
+  runFrames(3);
+  const after = engine.world().shops[0];
+  check("it is the same shopfront", !!after && after.slot === before.slot, `(${before?.slot} -> ${after?.slot})`);
+  check("and the same owner", !!after && after.name === before.name, `(${after?.name} vs ${before?.name})`);
+  engine.destroy();
+}
+
+console.log("city: residents do things");
+{
+  const engine = makeEngine();
+  for (let i = 0; i < 20; i++) engine.handle(entry("comment", `v${i}`, `v${i}`, "halo"));
+  // Two minutes, which is long enough for somebody to pick something up and for
+  // a shower to arrive on its own.
+  let sawActivity = false;
+  for (let i = 0; i < 60 * 120; i++) {
+    runFrames(1, 16);
+    if (engine.world().activities.length > 0) sawActivity = true;
+  }
+  check("somebody is doing something", sawActivity, `(${engine.world().activities.slice(0, 5).join(",")})`);
+  check("the city still has its residents", engine.residentCount() > 0, `(${engine.residentCount()})`);
+  engine.destroy();
+}
+
+console.log("city: people get out of the rain");
+{
+  // The wardrobe is what a gift buys. The umbrella in a shower is not — that is
+  // weather, and it belongs to everybody, which is the whole difference between
+  // a person walking through a downpour and a city that is coping with one.
+  const look = { skin: "#e8b48a", shirt: "#4a8ae0", pants: "#2a2a3a", shoe: "#1a1a24", hair: "#201810", name: "X" };
+  const pose = { kind: "walk", f: 0, wf: 0, dy: 0, dx: 0 };
+  const bare = { hat: 0, bag: false, umbrella: false };
+  const body = personParts(look, 0, pose);
+  const dry = decorate(body, bare, pose, false);
+  const wet = decorate(body, bare, pose, true);
+  check("a dry day adds no umbrella", dry.length === body.length, `(${dry.length} vs ${body.length})`);
+  check("rain adds one", wet.length === dry.length + 4, `(${wet.length - dry.length} parts)`);
+  check("and it clears when the rain stops", decorate(body, bare, pose, false).length === dry.length);
+  // A gift tier brings its own umbrella, in its own colour, rain or not.
+  const owned = decorate(body, { hat: 3, bag: true, umbrella: true }, pose, false);
+  check("a top gift carries an umbrella on a dry day", owned.length > dry.length, `(${owned.length})`);
+  // Somebody sitting on a bench is already out of the weather.
+  const sat = decorate(body, bare, { ...pose, kind: "sit" }, true);
+  check("somebody already sitting is left alone", sat.length === dry.length, `(${sat.length - dry.length})`);
+  // And the canopy has to sit above the head, not over the face.
+  const top = Math.min(...wet.map((p) => p[1]));
+  check("the canopy is above the head", top < 1, `(topmost y ${top})`);
+}
+
+console.log("city: everybody is actually visible");
+{
+  // A resident at `dissolve` 0 is drawn through the Bayer buffer at zero
+  // threshold, which is the same as not being drawn. Nothing about that is
+  // visible from the data layer: the record says they are in the city, walking,
+  // with a wardrobe. So this asks for the thing that was actually wrong.
+  const engine = makeEngine();
+  // Gifts, not comments, because a gift is the path that reproduced it: the
+  // viewer arrives, walks in, and then a whole batch of them turn up at once.
+  for (let i = 0; i < 24; i++) engine.handle(entry("gift", `v${i}`, `v${i}`, "Lion", { diamonds: 1, count: 1 }));
+  runFrames(60 * 6);
+  // And again, after they have all settled, which is when a returning viewer is
+  // most likely to be built from a record rather than from a join.
+  for (let i = 0; i < 24; i++) engine.handle(entry("gift", `v${i}`, `v${i}`, "Lion", { diamonds: 1, count: 1 }));
+  runFrames(60 * 6);
+  const d = engine.world().dissolve;
+  const stuck = d.filter((x) => x.d < 1 && x.state !== "enter");
+  check("nobody is stuck invisible", stuck.length === 0,
+    `(${stuck.length} of ${d.length}: ${stuck.slice(0, 3).map((x) => x.id + "@" + x.d + "/" + x.state).join(", ")})`);
+  check("and they are all solid", d.every((x) => x.d === 1), `(${d.map((x) => x.d).join(",")})`);
+  engine.destroy();
+}
+
+console.log("city: a top gift is actually drawn holding its umbrella");
+{
+  // The wardrobe test proves the record says hat 3 and umbrella. This proves the
+  // pixels say it too, because the two can disagree: a field read by the draw
+  // path that the record never sets looks exactly like a working feature at the
+  // data layer and a missing feature on screen.
+  const engine = makeEngine();
+  engine.handle(entry("gift", "RAFI", "rafi-1", "Lion", { diamonds: 2500, count: 1 }));
+  runFrames(60 * 6);
+  const w = engine.world().wardrobe.find((x) => x.id === "rafi-1");
+  check("the record has it", !!w && w.umbrella, `(${JSON.stringify(w)})`);
+
+  // Ask every canvas, then judge the one that actually has people on it. Which
+  // canvas that is depends on how the scene is layered, and guessing it is how a
+  // test ends up asserting on an empty buffer and passing for the wrong reason.
+  const measure = () => {
+    const out = [];
+    for (const cid of byId.keys()) {
+      const f = opsFor(cid).filter((o) => o.op === "fillRect");
+      out.push({
+        id: cid,
+        size: `${byId.get(cid).width}x${byId.get(cid).height}`,
+        fills: f,
+        bodies: f.filter((o) => o.w === 5 && o.h >= 3).length,
+        canopies: f.filter((o) => o.h === 1 && o.w >= 5).length,
+      });
+    }
+    return out;
+  };
+
+  const stop = captureOps();
+  runFrames(2);
+  stop();
+  const dry = measure().filter((c) => c.fills.length);
+  const withPeople = dry.filter((c) => c.bodies > 0);
+  check("somebody is painted", withPeople.length > 0,
+    `(${dry.map((c) => c.size + " bodies=" + c.bodies).join(" | ")})`);
+  for (const c of withPeople) {
+    check(`a canopy is drawn on the ${c.size} layer, with the bodies`, c.canopies > 0,
+      `(bodies ${c.bodies}, canopies ${c.canopies})`);
+  }
+  engine.destroy();
+}
+
+console.log("city: a shower arrives, and leaves");
+{
+  // Forced, because the shape of a shower is what is being checked here: it
+  // fades in, it rains, it clears, it leaves a rainbow, and the city keeps
+  // running through all of it.
+  const engine = makeEngine();
+  const seen = [];
+  engine.weather("rain");
+  // 26s of rain and 14s of rainbow is 40s to the second, so a 40s window is a
+  // coin toss. Fifty leaves room for the handover.
+  for (let i = 0; i < 60 * 50; i++) {
+    runFrames(1, 16);
+    const w = engine.world().weather;
+    if (seen[seen.length - 1] !== w) seen.push(w);
+  }
+  check("it rains when told to", seen[0] === "rain", `(${seen.join(" -> ")})`);
+  check("then it clears", seen.includes("rainbow"), `(${seen.join(" -> ")})`);
+  check("and comes back to dry", seen[seen.length - 1] === "dry", `(${seen.join(" -> ")})`);
+  check("and the city is still running after all of it", (runFrames(5), drawCalls > 0));
+  engine.destroy();
+}
+
+console.log("city: the weather also comes on its own");
+{
+  // A shower is due roughly every 150 seconds, so a 600 second window holds
+  // about four of them — enough to pass most of the time and fail the rest,
+  // which is worse than no test at all. Thirty minutes puts the odds of
+  // seeing nothing past twelve showers at effectively zero.
+  const engine = makeEngine();
+  // A shower is a run of frames, not a frame. Counting without noticing the
+  // transition counted one shower, always, which is a test that cannot fail.
+  let showers = 0, raining = false;
+  for (let i = 0; i < 60 * 1800; i++) {
+    runFrames(1, 16);
+    const wet = engine.world().weather === "rain";
+    if (wet && !raining) showers++;
+    raining = wet;
+  }
+  check("it rains without being told to", showers > 0, `(saw ${showers} shower(s))`);
+  check("more than once, so it is a cycle and not one long storm", showers > 1, `(${showers})`);
+  engine.destroy();
+}
+
+console.log("city: local traffic shows up");
+{
+  const engine = makeEngine();
+  const seen = new Set();
+  for (let i = 0; i < 60 * 240; i++) {
+    runFrames(1, 16);
+    for (const k of Object.keys(engine.vehicles().byType)) seen.add(k);
+  }
+  for (const want of ["ojek", "angkot", "becak", "bakso"]) {
+    check(`${want} appears on the road`, seen.has(want), `(saw ${[...seen].join(",")})`);
+  }
   engine.destroy();
 }
 
@@ -324,11 +661,23 @@ console.log("city: a gift procession is a procession, not a wall");
     peak = Math.max(peak, engine.vehicles().total);
   }
   check("the road never fills up", peak <= 10, `(peak ${peak} vehicles)`);
-  // The procession is deliberately short. A deep queue does not read as a bigger
-  // parade, it reads as traffic that never stops, so the road has to come back to
-  // ordinary traffic on its own once the gifts have stopped.
-  const after = engine.vehicles().total;
-  check("the road returns to ordinary traffic", after <= 5, `(${after} left after 30s)`);
+  // Ten large gifts take a while, because they now run one at a time instead of
+  // all at once: the queue is three of them deep plus one on stage. What matters
+  // is that it finishes, and that the road empties afterwards on its own.
+  let settledAt = -1;
+  for (let i = 0; i < 60 * 240; i++) {
+    runFrames(1, 16);
+    const st = engine.staging();
+    if (settledAt < 0 && st.active === null && st.waiting === 0 && !engine.vehicles().byType.limo) {
+      settledAt = i;
+    }
+  }
+  check("the queue empties itself", engine.staging().waiting === 0, `(${engine.staging().waiting} left)`);
+  // By type, not by total: ordinary traffic fills a 1280px road on its own, so
+  // a total was never a measure of the parade being over.
+  check("and the parade cars go home", !engine.vehicles().byType.limo,
+    `(${JSON.stringify(engine.vehicles().byType)})`);
+  check("and it did so without overflowing", settledAt >= 0, `(never settled)`);
   engine.destroy();
 }
 

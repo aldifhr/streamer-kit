@@ -112,7 +112,12 @@ export function lookFor(key: string): Look {
 export type Part = [number, number, number, number, string, boolean?];
 
 export interface Pose {
-  kind: "idle" | "walk" | "jump" | "cheer" | "wave" | "dance" | "clap";
+  /**
+   * `sit`, `eat` and `phone` are not emotes: they are what somebody is doing
+   * instead of walking, and the arm and leg shapes below are the difference
+   * between a person standing at a bench and a person sitting on one.
+   */
+  kind: "idle" | "walk" | "jump" | "cheer" | "wave" | "dance" | "clap" | "sit" | "eat" | "phone";
   f: number;
   wf: number;
   dy: number;
@@ -128,8 +133,26 @@ export interface Pose {
  * not hold the budget the stride slowed down and the residents appeared to
  * wade.
  */
-export function poseOf(moving: boolean, t: number, emote: Emote | null, now: number): Pose {
+export function poseOf(
+  moving: boolean,
+  t: number,
+  emote: Emote | null,
+  now: number,
+  activity: "sit" | "eat" | "phone" | null = null,
+): Pose {
   const pose: Pose = { kind: "idle", f: 0, wf: 0, dy: 0, dx: 0 };
+  // An activity wins over an emote: somebody sitting on a bench who is also
+  // waving is somebody who is sitting on a bench.
+  if (activity) {
+    pose.kind = activity;
+    if (activity === "phone") {
+      pose.wf = Math.floor(now / 700) % 2;
+      pose.dy = 1;
+    } else if (activity === "eat") {
+      pose.dy = Math.floor(now / 260) % 2;
+    }
+    return pose;
+  }
   if (emote && now < emote.until) {
     pose.kind = emote.type;
     if (emote.type === "jump") pose.dy = -R(Math.abs(Math.sin(((now - emote.start) / 1000) * 5)) * 5);
@@ -181,6 +204,9 @@ export function personParts(L: Look, rank: number, pose: Pose): Part[] {
   else if (k === "dance") {
     if (wf) { arms = 1; legs = "A"; } else { arms = 3; legs = "B"; }
   } else if (k === "clap") arms = 4;
+  else if (k === "sit") { arms = 0; legs = "bent"; }
+  else if (k === "eat") arms = 5;
+  else if (k === "phone") arms = 6;
 
   if (L.bag) add(1, 7, 2, 4, L.bagc);
   // Far arm.
@@ -191,8 +217,12 @@ export function personParts(L: Look, rank: number, pose: Pose): Part[] {
     add(farX, 7, 2, 3, shirtD);
     add(farX, 10, 2, 1, L.skin);
   }
-  // Legs.
-  if (legs === "A") {
+  // Legs. Seated, they go forward and down instead of down.
+  if (k === "sit") {
+    add(3, 11, 5, 2, L.pants);
+    add(7, 11, 2, 2, L.shoe);
+    add(3, 13, 1, 1, shade(L.pants, 0.7));
+  } else if (legs === "A") {
     add(2, 11, 2, 4, pantsD); add(5, 11, 2, 4, L.pants);
     add(2, 15, 3, 1, L.shoe); add(5, 15, 3, 1, L.shoe);
   } else if (legs === "B") {
@@ -219,6 +249,14 @@ export function personParts(L: Look, rank: number, pose: Pose): Part[] {
   } else if (arms === 3) {
     add(4, 7, 2, 3, L.shirt);
     add(4, 10, 2, 1, L.skin);
+  } else if (arms === 5) {
+    // Hand up to the mouth, which is what eating looks like at this size.
+    add(5, 6, 2, 2, L.shirt);
+    add(5, 3, 3, 3, L.skin);
+  } else if (arms === 6) {
+    // Held out in front, looking down at it.
+    add(5, 7, 3, 2, L.shirt);
+    add(7, 6, 2, 2, L.skin);
   } else {
     add(nearX, 7, 2, 3, L.shirt);
     add(nearX, 10, 2, 1, L.skin);

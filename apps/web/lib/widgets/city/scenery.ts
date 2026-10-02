@@ -7,7 +7,7 @@
  * and none of it changes between frames except the gradient and the lights.
  */
 
-import { BAY, OUT, R, mulberry32, textW } from "./sprites";
+import { BAY, OUT, R, mulberry32, sanitize, textW } from "./sprites";
 import type { Part } from "./sprites";
 import { FONT } from "./font";
 
@@ -41,7 +41,15 @@ export interface Building {
 
 export interface Door { x: number; y: number; openUntil: number }
 export interface Win { x: number; y: number; thr: number; warm: boolean; ph: number }
-export interface Sign { x: number; y: number; w: number; text: string; color: string; ph: number }
+export interface Sign { x: number; y: number; w: number; text: string; color: string; ph: number
+  /**
+   * Set when a viewer owns this shop.
+   *
+   * Owned signs are drawn in gold and never take the random neon colour, so the
+   * difference between "a shop" and "someone's shop" is visible from across the
+   * street without reading it.
+   */
+  owned?: boolean; }
 export interface Prop {
   type: "lamp" | "tree" | "bench" | "trash" | "mail" | "busstop";
   x: number;
@@ -69,10 +77,27 @@ export interface CityLayout {
   props: Prop[];
 }
 
-export function genCity(doc: Document, LW: number, LH: number, SY0: number, SY1: number): CityLayout {
+/**
+ * Who owns which shopfront, by building index.
+ *
+ * The layout is seeded, so the same index is the same shopfront on every rebuild
+ * and a viewer keeps their shop through a resize or a reload. That is the whole
+ * reason the seed exists rather than a random one.
+ */
+export type ShopOwners = Record<number, { name: string; tier: number }>;
+
+export function genCity(
+  doc: Document,
+  LW: number,
+  LH: number,
+  SY0: number,
+  SY1: number,
+  owners: ShopOwners = {},
+): CityLayout {
   const rnd = mulberry32(7 + LW * 13 + LH);
   const buildings: Building[] = [], doors: Door[] = [], wins: Win[] = [], signs: Sign[] = [];
   let x = -6, si = Math.floor(rnd() * SIGNS.length);
+  let index = 0;
   while (x < LW + 6) {
     const w = R(40 + rnd() * 26), h = R(LH * (0.26 + rnd() * 0.24));
     const pal = BPAL[Math.floor(rnd() * BPAL.length)];
@@ -81,9 +106,20 @@ export function genCity(doc: Document, LW: number, LH: number, SY0: number, SY1:
     let text = SIGNS[si++ % SIGNS.length];
     for (let t = 0; t < SIGNS.length && textW(text) + 6 > w - 6; t++) text = SIGNS[si++ % SIGNS.length];
     const doorX = x + 5 + Math.floor(rnd() * Math.max(1, w - 16));
+    // A viewer's name goes on the sign in place of the shop's trade, and the
+    // plate is sized to the name rather than to the word it replaced — a name
+    // that is longer than "APOTEK" used to run off the front of its own shop.
+    const owner = owners[index];
+    const owned = !!owner;
+    const sign = owned ? sanitize(owner.name).slice(0, 8) || text : text;
     const b: Building = {
       x, w, h, top: SY0 - h, pal, roof: Math.floor(rnd() * 3),
-      shop: { text, color: NEON[Math.floor(rnd() * NEON.length)], aw: [pal[3], "#ffffff"], doorX },
+      shop: {
+        text: sign,
+        color: owned ? "#ffd23f" : NEON[Math.floor(rnd() * NEON.length)],
+        aw: [pal[3], "#ffffff"],
+        doorX,
+      },
     };
     for (let wy = b.top + 9; wy < SY0 - SHOP_H - 5; wy += 10) {
       for (let wx = x + 5; wx < x + w - 8; wx += 8) {
@@ -91,9 +127,18 @@ export function genCity(doc: Document, LW: number, LH: number, SY0: number, SY1:
       }
     }
     doors.push({ x: doorX + 3, y: SY0, openUntil: 0 });
-    signs.push({ x: x + 3, y: SY0 - 19, w: textW(text) + 4, text, color: b.shop.color, ph: rnd() * 10 });
+    signs.push({
+      x: x + 3,
+      y: SY0 - 19,
+      w: textW(sign) + 4,
+      text: sign,
+      color: b.shop.color,
+      ph: rnd() * 10,
+      owned,
+    });
     buildings.push(b);
     x += w + Math.floor(rnd() * 3);
+    index += 1;
   }
 
   const props: Prop[] = [];

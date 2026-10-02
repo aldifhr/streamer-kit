@@ -24,7 +24,26 @@ const CACHE = process.argv[2] || path.resolve(__dirname, "../../../node_modules/
 // a file git could pick up.
 const OUT = process.argv[3] || "/root/.hermes/cache/scratch/city-harness.html";
 
-const MODULES = ["config", "font", "sprites", "scenery", "engine"];
+/**
+ * Every module the engine pulls in, in dependency order.
+ *
+ * The shim resolves relative ids from this list, so a module that is missing
+ * here is not a warning: the first `require` for it throws and the whole engine
+ * fails to load, which looks exactly like a blank canvas.
+ */
+const MODULES = [
+  "config",
+  "font",
+  "sprites",
+  "scenery",
+  "cosmetics",
+  "local",
+  "shops",
+  "activities",
+  "staging",
+  "weather",
+  "engine",
+];
 
 function moduleSource(name) {
   const file = path.join(CACHE, `${name}.js`);
@@ -113,6 +132,14 @@ ${bundle}
     for (var i = 0; i < n; i++) engine.handle(ev("gift", "burst" + i, "burst" + i, "Lion", { diamonds: 999, count: 1 }));
     return engine.vehicles();
   };
+  // A viewer who has given enough to own a shopfront and wear the top tier.
+  window.__bigGift = function () {
+    engine.handle(ev("gift", "RAFI", "rafi-1", "Lion", { diamonds: 2500, count: 1 }));
+    engine.handle(ev("gift", "DEWI", "dewi-1", "Galaxy", { diamonds: 400, count: 1 }));
+    engine.handle(ev("gift", "BUDI", "budi-1", "Rose", { diamonds: 60, count: 1 }));
+  };
+  window.__rain = function () { engine.weather("rain"); return "raining"; };
+  window.__world = function () { return { w: engine.world(), s: engine.staging(), v: engine.vehicles() }; };
 
   setInterval(function () {
     var c = engine.effectCounts();
@@ -130,4 +157,11 @@ ${bundle}
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, page);
+// A bundle that cannot resolve an import is a broken harness, not a broken
+// engine, and the two look the same in a browser: a blank canvas. Checked here
+// so the difference is a failed command rather than a picture of nothing.
+const missing = MODULES.filter((m) => !fs.existsSync(path.join(CACHE, `${m}.js`)));
+if (missing.length) {
+  throw new Error(`not compiled, run \`npm run test:city\` first: ${missing.join(", ")}`);
+}
 console.log(OUT);

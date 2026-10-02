@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "outDir": "../../../node_modules/.cache/stream-kit/feed-contract",
+    "rootDir": "..",
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": [
+      "es2022",
+      "dom"
+    ],
+    "jsx": "react-jsx",
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    }
+  },
+  "files": [
+    "../lib/feed-wire.ts",
+    "../lib/widgets/jar-value.ts"
+  ]
+}

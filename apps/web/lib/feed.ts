@@ -11,47 +11,6 @@ import type { Entry, EventKind } from "@/lib/widgets/types";
  * The verb is deliberately absent: "kei sent Rose x1" is assembled at render
  * time from VERB below, so a join cannot come out doubled.
  */
-const FROM_WIRE: Record<
-  string,
-  (d: Record<string, unknown>) => {
-    kind: EventKind;
-    user: string;
-    userId: string;
-    value: string;
-    meta: Record<string, unknown>;
-  }
-> = {
-  comment: (d) => ({ kind: "comment", user: String(d.user), userId: id(d), value: String(d.text), meta: {} }),
-  like: (d) => ({ kind: "like", user: String(d.user), userId: id(d), value: `x${d.count}`, meta: { totalLikes: d.totalLikes } }),
-  gift: (d) => ({
-    kind: "gift",
-    user: String(d.user),
-    userId: id(d),
-    value: `${d.giftName} x${d.count}`,
-    meta: { diamonds: d.value },
-  }),
-  join: (d) => ({ kind: "join", user: String(d.user), userId: id(d), value: "", meta: { viewers: d.viewers } }),
-  follow: (d) => ({ kind: "follow", user: String(d.user), userId: id(d), value: "", meta: {} }),
-  share: (d) => ({ kind: "share", user: String(d.user), userId: id(d), value: d.count ? `+${d.count}` : "", meta: {} }),
-  alert: (d) => ({
-    kind: "alert",
-    user: String(d.user ?? ""),
-    userId: id(d),
-    value: String(d.text ?? ""),
-    meta: { title: d.title ?? "", icon: d.icon ?? "★" },
-  }),
-};
-
-/**
- * The backend sends a stable handle as `userId` and already falls back to the
- * nickname server-side, so the only case left to cover here is a payload that
- * carries neither.
- */
-const id = (d: Record<string, unknown>): string => {
-  const stable = d.userId;
-  if (typeof stable === "string" && stable) return stable;
-  return typeof d.user === "string" ? d.user : "anon";
-};
 
 /**
  * Upper bound on the shared buffer.
@@ -63,6 +22,13 @@ const id = (d: Record<string, unknown>): string => {
  * its own limits on top.
  */
 const BUFFER_MAX = 200;
+
+import { FROM_WIRE } from "./feed-wire";
+
+// Re-exported so the socket hook stays the single entry point for callers that
+// want the whole feed surface, while the normalisation table itself stays
+// importable on its own by a test that has no browser.
+export { FROM_WIRE };
 
 export type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
 

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bool, num, str } from "./style";
 import { takeNew } from "./astro/consume";
+import { jarValue, DEFAULT_WEIGHTS } from "./jar-value";
+import type { Source } from "./jar-value";
 import type { Entry, WidgetProps, WidgetType } from "./types";
 
 /**
@@ -26,40 +28,8 @@ import type { Entry, WidgetProps, WidgetType } from "./types";
  * irrelevant, so the defaults are deliberately lopsided and adjustable.
  */
 
-type Source = "gift" | "like" | "follow" | "share" | "donation";
-
 const nf = new Intl.NumberFormat("en-US");
 
-/** What one of each event is worth by default, in jar units. */
-const DEFAULT_WEIGHTS: Record<Source, number> = {
-  gift: 1,
-  like: 0.05,
-  follow: 25,
-  share: 15,
-  donation: 1,
-};
-
-function valueOf(e: Entry, source: Source): number {
-  switch (source) {
-    case "gift": {
-      // A gift's worth is its diamonds. A rosace is 1 and a lion is 1000, and
-      // treating them as one event each would make a single big gift look
-      // like a small one.
-      const diamonds = num(e.meta, "diamonds", 0);
-      const count = Math.max(1, num(e.meta, "count", 1));
-      return diamonds * count;
-    }
-    case "like":
-      return Math.max(1, num(e.meta, "count", 1));
-    case "follow":
-    case "share":
-      return 1;
-    case "donation":
-      return num(e.meta, "amount", 0);
-    default:
-      return 0;
-  }
-}
 
 function DonationJar({ style, entries, sceneId }: WidgetProps) {
   const target = Math.max(1, num(style, "target", 1000));
@@ -130,7 +100,7 @@ function DonationJar({ style, entries, sceneId }: WidgetProps) {
       else if (e.kind === "alert" && num(e.meta, "amount", 0) > 0) source = "donation";
 
       if (!source || !sources.includes(source)) continue;
-      const raw = valueOf(e, source);
+      const raw = jarValue(e, source);
       if (!(raw > 0)) continue;
       const worth = raw * (weights[source] ?? 1);
       if (!(worth > 0)) continue;

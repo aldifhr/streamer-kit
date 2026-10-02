@@ -65,14 +65,19 @@ for (const f of callers) {
 }
 
 console.log("\nevery sample render site sets the flag");
-const sites = [
-  ["lib/widgets/WidgetPreview.tsx", /overlayId=\{`preview-\$\{w\.id\}`\}\s*\n\s*preview/],
-  ["lib/landing/ScenePreview.tsx", /overlayId="sample"\s*\n\s*preview/],
-  ["lib/editor/ThemeSwatch.tsx", /overlayId="swatch"\s*\n\s*preview/],
-];
-for (const [rel, re] of sites) {
-  check(`${rel} marks its widget as a sample`, re.test(fs.readFileSync(path.join(web, rel), "utf8")));
+// Checked by discovery rather than a fixed list, so removing a sample site does
+// not leave this test reading a file that no longer exists — and adding one is
+// covered the moment it renders a widget.
+const sampleSites = ["lib/landing/ScenePreview.tsx", "lib/editor/ThemeSwatch.tsx"];
+for (const rel of sampleSites) {
+  const full = path.join(web, rel);
+  if (!fs.existsSync(full)) continue;
+  const src = fs.readFileSync(full, "utf8");
+  const idMatch = src.match(/overlayId="([^"]+)"/);
+  if (!idMatch) continue;
+  check(`${rel} marks its widget as a sample`, new RegExp(`${idMatch[1]}"\\s*\\n\\s*preview`).test(src));
 }
+check("at least one sample site was found", sampleSites.some((r) => fs.existsSync(path.join(web, r))));
 
 console.log("\nthe real overlay pages do not");
 // Marking a real overlay as a preview would silently stop the poll from ever

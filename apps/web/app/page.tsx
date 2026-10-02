@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { HeroPreviews } from "@/lib/landing/HeroPreviews";
 import { WidgetGrid } from "@/lib/landing/WidgetGrid";
-import { WidgetPreviewGrid } from "@/lib/widgets/WidgetPreview";
 
 import { WIDGET_LIST } from "@/lib/widgets/registry";
 
@@ -154,9 +153,6 @@ export default function Home() {
             <WidgetGrid />
           </div>
         </section>
-
-        {/* The grid lives past the client boundary; see lib/widgets/WidgetPreview.tsx for why. */}
-        <WidgetPreviewGrid />
 
         {/* Steps */}
         <section className="border-t border-white/10 px-6 py-24">

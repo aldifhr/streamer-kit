@@ -12,7 +12,7 @@ import { mk, plateOn, txtOn } from "../city/scenery";
 import type { Ctx } from "../city/scenery";
 import type { Part } from "../city/sprites";
 import { CAR_H, CAR_W } from "./scene";
-import { DESTINATIONS } from "./config";
+
 
 export type TrainPhase = "arrive" | "dwell" | "close" | "depart";
 export type TrainRole = "mid" | "cabR" | "cabL";
@@ -205,7 +205,14 @@ export interface NewTrainOpts {
   text?: string;
 }
 
-export function newTrain(doc: Document, LW: number, dwellMs: number, opts?: NewTrainOpts, tier = 2): Train {
+export function newTrain(
+  doc: Document,
+  LW: number,
+  dwellMs: number,
+  destinations: string[],
+  opts?: NewTrainOpts,
+  tier = 2,
+): Train {
   const o = opts || {};
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
   const n = carsFor(LW, tier);
@@ -219,7 +226,7 @@ export function newTrain(doc: Document, LW: number, dwellMs: number, opts?: NewT
     scheme: o.gold ? GOLD_SCHEME : SCHEMES[Math.floor(Math.random() * SCHEMES.length)],
     gold: !!o.gold,
     banner: o.text ? makeBanner(doc, o.text) : null,
-    dest: DESTINATIONS[Math.floor(Math.random() * DESTINATIONS.length)],
+    dest: destinations.length ? destinations[Math.floor(Math.random() * destinations.length)] : "?",
     phase: "arrive",
     t: 0,
     startX,

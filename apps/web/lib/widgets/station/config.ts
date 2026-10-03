@@ -8,6 +8,30 @@
  * next frame, and the street was a queue of people blinking.
  */
 
+export const DESTINATION_DEFAULTS = "PURWOKERTO, BANDUNG, JAKARTA, YOGYAKARTA, SURABAYA, CIREBON, SEMARANG";
+
+/**
+ * Destinations, cleaned.
+ *
+ * The bitmap font has no lowercase and the board is 62 pixels wide, so a long
+ * name has to be cut rather than allowed to run off the sign. Empty entries and
+ * duplicates go: a board listing "JAKARTA, , JAKARTA" looks broken.
+ */
+export function destinationsFrom(raw: string | undefined): string[] {
+  const out: string[] = [];
+  for (const part of String(raw ?? "").split(",")) {
+    const v = part.trim().toUpperCase();
+    if (v && out.indexOf(v) < 0) out.push(v);
+  }
+  return out;
+}
+
+/** Falls back to the defaults when a station is left with nowhere to go. */
+export const destinationsOr = (raw: string | undefined): string[] => {
+  const list = destinationsFrom(raw);
+  return list.length ? list : destinationsFrom(DESTINATION_DEFAULTS);
+};
+
 export interface StationConfig {
   /** How many passengers the platform will hold before one is sent home. */
   maxPeople: number;
@@ -34,6 +58,21 @@ export interface StationConfig {
   labelActive: number;
   /** Lowercased, comma separated. */
   badWords: string;
+  /**
+   * What the hanging sign says.
+   *
+   * It used to be the literal string "STASIUN KOTA", which meant every station
+   * in every stream was called the same thing. The city has had a name field
+   * all along; the station not having one was an omission, not a decision.
+   */
+  stationName: string;
+  /**
+   * Where the trains go, comma separated.
+   *
+   * A station whose every service goes to the same seven cities is not a
+   * station, it is a list.
+   */
+  destinations: string;
   /** Draws people arriving and leaving instead of running empty. */
   demo: boolean;
 }
@@ -52,6 +91,8 @@ export const DEFAULT_STATION_CONFIG: StationConfig = {
   labelTop: 5,
   labelActive: 10,
   badWords: "",
+  stationName: "STASIUN KOTA",
+  destinations: DESTINATION_DEFAULTS,
   demo: false,
 };
 
@@ -146,22 +187,21 @@ export function toStationConfig(
   if (typeof style["bad-words"] === "string" && style["bad-words"] !== d.badWords) {
     out.badWords = style["bad-words"];
   }
+  // The font is upper-case only, so the name is folded here rather than at draw
+  // time: two places doing it is how one of them ends up missing.
+  if (typeof style["station-name"] === "string") {
+    const nm = style["station-name"].trim().toUpperCase();
+    if (nm !== d.stationName) out.stationName = nm || d.stationName;
+  }
+  if (typeof style.destinations === "string" && style.destinations !== d.destinations) {
+    out.destinations = style.destinations;
+  }
   if (style.demo !== undefined) {
     const demo = bool(style.demo, d.demo);
     if (demo !== d.demo) out.demo = demo;
   }
   return out;
 }
-
-export const DESTINATIONS = [
-  "PURWOKERTO",
-  "BANDUNG",
-  "JAKARTA",
-  "YOGYAKARTA",
-  "SURABAYA",
-  "CIREBON",
-  "SEMARANG",
-] as const;
 
 export const RANKS = ["PENUMPANG", "LANGGANAN", "SULTAN"] as const;
 

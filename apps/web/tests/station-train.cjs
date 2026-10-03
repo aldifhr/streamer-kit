@@ -82,7 +82,7 @@ function load(name) {
   }
 }
 
-const { toStationConfig, DEFAULT_STATION_CONFIG } = load("lib/widgets/station/config");
+const { toStationConfig, DEFAULT_STATION_CONFIG, destinationsFrom, destinationsOr } = load("lib/widgets/station/config");
 const train = load("lib/widgets/station/train");
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,36 @@ console.log("\nconfig");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nthis station");
+{
+  const d = DEFAULT_STATION_CONFIG;
+  check("a station has a name by default", !!d.stationName, JSON.stringify(d.stationName));
+  check("a station goes somewhere by default", destinationsFrom(d.destinations).length >= 5, d.destinations);
+
+  const named = toStationConfig({ "station-name": "stasiun baru" });
+  check("a name is taken", named.stationName === "STASIUN BARU", JSON.stringify(named.stationName));
+
+  // The bitmap font has no lower case, so a name that is not folded here draws
+  // as a gap in the middle of a sign.
+  const folded = toStationConfig({ "station-name": "Stasiun Baru" });
+  check("a mixed-case name is folded up", folded.stationName === "STASIUN BARU", JSON.stringify(folded.stationName));
+
+  const blank = toStationConfig({ "station-name": "   " });
+  check("a blank name falls back", !blank.stationName || blank.stationName === d.stationName, JSON.stringify(blank));
+
+  check("destinations split", destinationsFrom("Jakarta, Bandung").join("|") === "JAKARTA|BANDUNG");
+  check("destinations drop empties", destinationsFrom("JAKARTA, , , BANDUNG").join("|") === "JAKARTA|BANDUNG");
+  check("destinations drop duplicates", destinationsFrom("JAKARTA, jakarta, BANDUNG").join("|") === "JAKARTA|BANDUNG");
+  check("destinations fold case", destinationsFrom("jakarta").join("|") === "JAKARTA");
+  check("a station with nowhere to go uses the defaults", destinationsOr("").length >= 5, JSON.stringify(destinationsOr("")));
+  check("a station given nowhere to go uses the defaults", destinationsOr("  ,  ").length >= 5);
+  check("a station given destinations keeps them", destinationsOr("TOSARI").join("|") === "TOSARI", JSON.stringify(destinationsOr("TOSARI")));
+
+  const one = toStationConfig({ destinations: "TOSARI" });
+  check("a custom destination list is taken", one.destinations === "TOSARI", JSON.stringify(one.destinations));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\ntrain lifecycle");
 // A clock the test drives, so "eight seconds later" is eight seconds and not
 // however long the machine happened to take.
@@ -143,11 +173,11 @@ function step(tr, busy) {
 }
 
 {
-  const tr = train.newTrain(stubDoc, LW, 14000);
+  const tr = train.newTrain(stubDoc, LW, 14000, ["BANDUNG"]);
 
   check("it starts off screen", tr.x < -tr.len || tr.x > LW, "x=" + tr.x);
   check("it starts arriving", tr.phase === "arrive");
-  check("it has doors", tr.doors.length === 0 || tr.doors.length > 0);
+  check("it picks a destination from the list", typeof tr.dest === "string" && tr.dest.length > 0, tr.dest);
 
   // Run to the platform.
   let guard = 0;
@@ -182,7 +212,7 @@ function step(tr, busy) {
   check("it moved off screen", tr.x > LW || tr.x < -tr.len, "x=" + tr.x + " from " + start);
 
   // Departing to the right leaves right, not to the left.
-  const right = train.newTrain(stubDoc, LW, 1000);
+  const right = train.newTrain(stubDoc, LW, 1000, ["BANDUNG"]);
   right.dir = 1;
   right.phase = "depart";
   right.t = 0;
@@ -190,7 +220,7 @@ function step(tr, busy) {
   for (let i = 0; i < 30; i++) step(right, false);
   check("a right-hand train exits right", right.x > right.stopX, "x=" + right.x + " stop=" + right.stopX);
 
-  const left = train.newTrain(stubDoc, LW, 1000);
+  const left = train.newTrain(stubDoc, LW, 1000, ["BANDUNG"]);
   left.dir = -1;
   left.phase = "depart";
   left.t = 0;
@@ -202,7 +232,7 @@ function step(tr, busy) {
 // ---------------------------------------------------------------------------
 console.log("\npeople hold the doors open");
 {
-  const tr = train.newTrain(stubDoc, LW, 14000);
+  const tr = train.newTrain(stubDoc, LW, 14000, ["BANDUNG"]);
   let guard = 0;
   while (tr.phase !== "dwell" && guard++ < 2000) step(tr, false);
   while (tr.open < 0.99 && guard++ < 3000) step(tr, false);
@@ -250,8 +280,9 @@ console.log("\nsize follows the room");
   check("ambient is clamped too", train.ambientFor(-1) === ambient[0] && train.ambientFor(99) === ambient[4]);
 
   // A train built for a tier has to actually be that long.
-  const tr = train.newTrain(stubDoc, roomy, 14000, undefined, 4);
+  const tr = train.newTrain(stubDoc, roomy, 14000, ["BANDUNG"], undefined, 4);
   check("a new train honours its tier", tr.n === train.carsFor(roomy, 4), "n=" + tr.n);
+  check("a train goes to one of this station's destinations", tr.dest === "BANDUNG", tr.dest);
   check("and has two doors per car", tr.doors.length === 0);
 }
 

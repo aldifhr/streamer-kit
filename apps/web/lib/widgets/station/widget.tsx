@@ -108,6 +108,8 @@ export const stationWidget: WidgetType = {
     "label-active": 10,
     "pixel-size": 0,
     "bad-words": "",
+    "station-name": "STASIUN KOTA",
+    destinations: "PURWOKERTO, BANDUNG, JAKARTA, YOGYAKARTA, SURABAYA, CIREBON, SEMARANG",
   },
   groups: [
     {
@@ -137,6 +139,13 @@ export const stationWidget: WidgetType = {
       controls: [
         { kind: "range", key: "express-gift", label: "Express at", min: 10, max: 2000, step: 10, suffix: "💎" },
         { kind: "range", key: "party-gift", label: "Gold train at", min: 50, max: 5000, step: 10, suffix: "💎" },
+      ],
+    },
+    {
+      title: "This station",
+      controls: [
+        { kind: "text", key: "station-name", label: "Station name" },
+        { kind: "text", key: "destinations", label: "Destinations" },
       ],
     },
     {

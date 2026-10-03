@@ -111,9 +111,15 @@ function harnessFail(bar, e) {
 window.addEventListener("error", function (ev) { harnessFail(document.getElementById("bar"), ev.error || ev.message); });
 (function () {
  try {
+  var q0 = new URLSearchParams(location.search);
   var cv = document.getElementById("c");
   var bar = document.getElementById("bar");
-  var engine = require("./engine").createStationEngine(document, cv, { demo: false, dayLen: 600 });
+  var engine = require("./engine").createStationEngine(document, cv, {
+    demo: false,
+    dayLen: 600,
+    stationName: q0.get("name") || "STASIUN KOTA",
+    destinations: q0.get("dest") || "PURWOKERTO, BANDUNG, JAKARTA, YOGYAKARTA, SURABAYA, CIREBON, SEMARANG",
+  });
   var q = new URLSearchParams(location.search);
   engine.resize(cv.clientWidth, cv.clientHeight);
   engine.start();
@@ -151,6 +157,8 @@ window.addEventListener("error", function (ev) { harnessFail(document.getElement
   engine.handle(feed("like", 4, "", { count: 10 }));
   engine.handle(feed("follow", 5, "", {}));
   engine.handle(feed("share", 6, "", {}));
+  engine.handle(feed("share", 6, "", {}));
+  engine.handle(feed("share", 6, "", {}));
   if (q.get("people") !== "0") pushJoins(4);
 
   var ui = setInterval(function () {
@@ -164,7 +172,7 @@ window.addEventListener("error", function (ev) { harnessFail(document.getElement
       "<b>" + s.trainPhase + "</b> open " + s.trainOpen + " doors " + s.doors +
       " &nbsp;|&nbsp; on platform <b>" + s.onPlatform + "</b> queued " + (s.states.queued || 0) +
       " &nbsp;|&nbsp; room " + s.audienceShown + " " + s.tier + " cars " + s.cars +
-      " ambient " + s.ambient + " real " + s.real +
+      " ambient " + s.ambient + " real " + s.real + " friends " + (s.friends || 0) + " dest " + (s.dest || "-") + " name " + (s.name || "-") +
       " &nbsp;|&nbsp; passers " + s.passers + " sprites " + s.sprites + " 💎 " + s.diamonds +
       " &nbsp;|&nbsp; " + s.LW + "x" + s.LH;
   }

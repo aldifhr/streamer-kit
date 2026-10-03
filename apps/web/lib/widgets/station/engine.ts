@@ -28,7 +28,7 @@ import {
 import type { Emote, Look, Pose } from "../city/sprites";
 import { drawPartsOn, mk, plateOn, txtOn, txtOutlineOn } from "../city/scenery";
 import type { Ctx } from "../city/scenery";
-import { DEFAULT_STATION_CONFIG, RANKS, RANK_XP } from "./config";
+import { DEFAULT_STATION_CONFIG, RANKS, RANK_XP, destinationsOr } from "./config";
 import { audienceTier, easeAudience, formatAudience, settledTier } from "../city/audience";
 import type { StationConfig } from "./config";
 import {
@@ -105,6 +105,25 @@ export interface Passenger {
    * never counts them.
    */
   ambient: boolean;
+  /**
+   * Somebody they brought with them.
+   *
+   * A share is the one event that means there are two of you, and drawing two
+   * is the only thing that makes the difference visible. Two at most: a fourth
+   * share from the same person should be a bigger thank-you, not a queue.
+   */
+  friends: Friend[];
+}
+
+export interface Friend {
+  look: Look;
+  x: number;
+  y: number;
+  dir: 1 | -1;
+  moving: boolean;
+  t: number;
+  /** 0 to 1, so a friend walks into being rather than popping in. */
+  k: number;
 }
 
 interface Coin {
@@ -188,6 +207,7 @@ export function createStationEngine(
   cfgIn?: Partial<StationConfig>,
 ): StationEngine {
   const cfg: StationConfig = { ...DEFAULT_STATION_CONFIG, ...cfgIn };
+  const destinations = destinationsOr(cfg.destinations);
   const g = canvas.getContext("2d") as Ctx;
   const scratch = mk(1, 1, doc);
   const scratchCtx = scratch.getContext("2d", { willReadFrequently: true }) as Ctx;
@@ -359,6 +379,7 @@ export function createStationEngine(
       emote: null,
       dissolve: 1,
       ambient: false,
+      friends: [],
     };
     people.set(id, p);
     // A new arrival pulls a train in. Without this a quiet room sits empty
@@ -366,6 +387,17 @@ export function createStationEngine(
     wantTrain = true;
     if (!train) nextTrainAt = Math.min(nextTrainAt, t + 800);
     return p;
+  }
+
+  /**
+   * The friend walks in behind them.
+   *
+   * `k` fades the sprite in as it catches up, and the look is derived from the
+   * person's own id so the same viewer always brings the same companion. A
+   * random one per share would give a viewer a different friend every time.
+   */
+  function newFriend(p: Passenger, i: number, instant: boolean): Friend {
+    return { look: lookFor(p.id + "#f" + i), x: p.x - 8, y: p.y, dir: 1, moving: false, t: rand(0, 5), k: instant ? 1 : 0 };
   }
 
   function spawnAtDoor(p: Passenger, tr: Train): void {
@@ -395,6 +427,8 @@ export function createStationEngine(
 
   function startExit(p: Passenger): void {
     if (p.state === "exit") return;
+    // A friend leaving on their own would walk off the frame alone, which is
+    // the one ending that undoes the whole point of having them.
     // Somebody still waiting on the platform has not arrived anywhere yet, so
     // there is nothing to send home. Dropping them silently is right: they were
     // never on screen.
@@ -543,6 +577,23 @@ export function createStationEngine(
       }
     }
     if (p.state !== "exit") p.y = clamp(p.y, layout.PY0 + 6, LH - 16);
+
+    p.friends.forEach((f, i) => {
+      f.t += dt;
+      f.k = Math.min(1, f.k + dt / 0.9);
+      const tx = p.x - p.dir * (9 + i * 9);
+      const ty = p.y + (i ? 2 : -2);
+      const dx = tx - f.x;
+      const dy = ty - f.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 1.5) {
+        const s = Math.min(d, p.speed * 1.4 * dt);
+        f.x += (dx / d) * s;
+        f.y += (dy / d) * s;
+        f.moving = true;
+        if (Math.abs(dx) > 1) f.dir = dx > 0 ? 1 : -1;
+      } else f.moving = false;
+    });
   }
 
   /**
@@ -631,6 +682,7 @@ export function createStationEngine(
       return;
     }
     if (e.kind === "share") {
+      if (p.friends.length < 2) p.friends.push(newFriend(p, p.friends.length, false));
       gainXP(p, 3);
       sparkle(p.x - 8, p.y - 8, 12, "#9fe8ff");
       addToast(nick + " AJAK TEMAN", "#7da8ff");
@@ -687,7 +739,7 @@ export function createStationEngine(
   // --- world ---------------------------------------------------------------
   function updateWorld(dt: number, t: number): void {
     if (!train && (t >= nextTrainAt || wantTrain)) {
-      train = newTrain(doc, LW, cfg.dwell * 1000, special || undefined, bakedTier);
+      train = newTrain(doc, LW, cfg.dwell * 1000, destinations, special || undefined, bakedTier);
       wantTrain = false;
       special = null;
       say("KERETA JALUR 1 TUJUAN " + train.dest + " SEGERA MASUK");
@@ -782,31 +834,7 @@ export function createStationEngine(
   // --- drawing -------------------------------------------------------------
   function drawPerson(p: Passenger, t: number): void {
     const pose = poseOf(p.moving, p.t, p.emote && t < p.emote.until ? p.emote : null, t);
-    const fx = R(p.x);
-    const fy = R(p.y);
-    if (p.dissolve < 1) {
-      const X0 = fx - 13;
-      const Y0 = fy - 22;
-      scratchCtx.clearRect(0, 0, 26, 30);
-      drawPersonInto(scratchCtx, p, pose);
-      const id = scratchCtx.getImageData(0, 0, 26, 30);
-      const d = id.data;
-      for (let y = 0; y < 30; y++) {
-        for (let x = 0; x < 26; x++) {
-          const i = (y * 26 + x) * 4;
-          if (d[i + 3] && p.dissolve <= BAY[((X0 + x) & 3) + (((Y0 + y) & 3) << 2)] / 16) d[i + 3] = 0;
-        }
-      }
-      scratchCtx.putImageData(id, 0, 0);
-      g.drawImage(scratch, X0, Y0);
-      return;
-    }
-    shadowAt(fx, fy);
-    drawPersonInto(g, p, pose);
-  }
-
-  function drawPersonInto(target: Ctx, p: Passenger, pose: Pose): void {
-    drawPartsOn(target, personParts(p.look, p.rank, pose), R(p.x) - 4 + (pose.dx || 0), R(p.y) - 15 + (pose.dy || 0), p.dir < 0);
+    drawSpriteAt(g, p.look, p.rank, pose, R(p.x), R(p.y), p.dir, p.dissolve);
   }
 
   function shadowAt(fx: number, fy: number): void {
@@ -815,6 +843,49 @@ export function createStationEngine(
     g.fillStyle = "rgba(0,0,0,.16)";
     g.fillRect(fx - 2, fy + 1, 5, 1);
   }
+
+  /**
+   * One person, drawn at a position, optionally part-way into being.
+   *
+   * Shared by residents and their companions so the two are the same sprite by
+   * construction. The dissolve lives here rather than in the caller because it
+   * is the part that has to be identical for a companion and their host, or
+   * they read as different art.
+   */
+  function drawSpriteAt(
+    target: Ctx,
+    look: Look,
+    rank: number,
+    pose: Pose,
+    fx: number,
+    fy: number,
+    dir: 1 | -1,
+    k: number,
+  ): void {
+    if (k < 1) {
+      const X0 = fx - 13;
+      const Y0 = fy - 22;
+      scratchCtx.clearRect(0, 0, 26, 30);
+      drawPartsOn(scratchCtx, personParts(look, rank, pose), 9 + (pose.dx || 0), 7 + (pose.dy || 0), dir < 0);
+      const id = scratchCtx.getImageData(0, 0, 26, 30);
+      const d = id.data;
+      for (let y = 0; y < 30; y++) {
+        for (let x = 0; x < 26; x++) {
+          const i = (y * 26 + x) * 4;
+          if (d[i + 3] && k <= BAY[((X0 + x) & 3) + (((Y0 + y) & 3) << 2)] / 16) d[i + 3] = 0;
+        }
+      }
+      scratchCtx.putImageData(id, 0, 0);
+      target.drawImage(scratch, X0, Y0);
+      return;
+    }
+    target.fillStyle = "rgba(0,0,0,.28)";
+    target.fillRect(fx - 3, fy, 7, 1);
+    target.fillStyle = "rgba(0,0,0,.16)";
+    target.fillRect(fx - 2, fy + 1, 5, 1);
+    drawPartsOn(target, personParts(look, rank, pose), fx - 4 + (pose.dx || 0), fy - 15 + (pose.dy || 0), dir < 0);
+  }
+
 
   function drawScene(t: number, nowMs: number): void {
     const drawables: { y: number; fn: () => void }[] = [];
@@ -830,6 +901,17 @@ export function createStationEngine(
     for (const p of people.values()) {
       if (p.state === "queued") continue;
       drawables.push({ y: p.y, fn: () => drawPerson(p, nowMs) });
+      p.friends.forEach((f) => {
+        const ffx = R(f.x);
+        const ffy = R(f.y);
+        // A wave belongs to the person waving. Mirrored onto the friend it
+        // reads as the friend waving too, which is a different message.
+        const fpose = poseOf(f.moving, f.t, p.emote && p.emote.type !== "wave" ? p.emote : null, nowMs);
+        drawables.push({
+          y: f.y,
+          fn: () => drawSpriteAt(g, f.look, 0, fpose, ffx, ffy, f.dir, Math.min(f.k, p.dissolve)),
+        });
+      });
     }
     drawables.sort((a, b) => a.y - b.y);
 
@@ -857,7 +939,7 @@ export function createStationEngine(
       g,
       LW,
       layout.CH,
-      "STASIUN KOTA",
+      cfg.stationName,
       train
         ? train.phase === "arrive"
           ? "MASUK"
@@ -1218,6 +1300,9 @@ export function createStationEngine(
         people: people.size,
         onPlatform: [...people.values()].filter((p) => p.state !== "queued").length,
         ambient: [...people.values()].filter((p) => p.ambient).length,
+        friends: [...people.values()].reduce((n, p) => n + p.friends.length, 0),
+        name: cfg.stationName,
+        dest: train ? train.dest : null,
         real: [...people.values()].filter((p) => !p.ambient && p.state !== "queued").length,
         audience: audienceReal,
         audienceShown: Math.round(audienceShown),

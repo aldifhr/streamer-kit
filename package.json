@@ -32,7 +32,9 @@
     "test:city-tiers": "npm run test:city && node apps/web/tests/city-tiers.cjs",
     "test:city-feed": "tsc -p apps/web/tests/tsconfig.feed.json && node apps/web/tests/city-subscription.cjs",
     "test:city-inspector": "npm run test:city && node apps/web/tests/city-inspector.cjs",
-    "test:notice": "tsc -p apps/web/tests/tsconfig.overlay.json && node apps/web/tests/overlay-notice.cjs"
+    "test:notice": "tsc -p apps/web/tests/tsconfig.overlay.json && node apps/web/tests/overlay-notice.cjs",
+    "test:station": "tsc -p apps/web/tests/tsconfig.station.json && node apps/web/tests/station-train.cjs",
+    "harness:station": "npm run test:station && node apps/web/tests/build-station-harness.cjs"
   },
   "devDependencies": {
     "@types/three": "^0.170.0",

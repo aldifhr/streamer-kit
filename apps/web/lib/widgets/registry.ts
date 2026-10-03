@@ -12,6 +12,7 @@ import { cityWidget } from "./city/widget";
 import { donationJarWidget } from "./donationjar";
 import { goalWidget } from "./goal";
 import { socialWidget } from "./social";
+import { stationWidget } from "./station/widget";
 import type { WidgetType } from "./types";
 
 export const WIDGET_TYPES: Record<string, WidgetType> = {
@@ -21,6 +22,7 @@ export const WIDGET_TYPES: Record<string, WidgetType> = {
   city: cityWidget,
   "donation-jar": donationJarWidget,
   social: socialWidget,
+  station: stationWidget,
 };
 
 /** Registration order, which is also the order the "add widget" menu lists. */
@@ -31,6 +33,7 @@ export const WIDGET_LIST: WidgetType[] = [
   goalWidget,
   donationJarWidget,
   socialWidget,
+  stationWidget,
 ];
 
 export function widgetType(id: string): WidgetType | undefined {

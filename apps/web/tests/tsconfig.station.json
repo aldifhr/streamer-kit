@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "outDir": "../../../node_modules/.cache/stream-kit/station",
+    "rootDir": "..",
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "files": [
+    "../lib/widgets/station/engine.ts",
+    "../lib/widgets/station/config.ts",
+    "../lib/widgets/station/train.ts",
+    "../lib/widgets/station/scene.ts"
+  ]
+}

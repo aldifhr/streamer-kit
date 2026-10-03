@@ -287,6 +287,70 @@ console.log("\nsize follows the room");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nwhat an open door actually draws");
+{
+  /**
+   * A context that records instead of drawing.
+   *
+   * This is the whole reason the door question could be answered at all. In the
+   * browser a train is only open for a few seconds between two services, and
+   * every sample taken by hand landed on a closed one — so the drawing is
+   * checked here, where the train is stopped and open because the test says so.
+   */
+  function recorder() {
+    const ops = [];
+    const ctx = {
+      _ops: ops,
+      _fill: "",
+      get fillStyle() { return this._fill; },
+      set fillStyle(v) { this._fill = v; },
+      fillRect(x, y, w, h) { ops.push({ colour: this._fill, x, y, w, h }); },
+      drawImage() {},
+      save() {}, restore() {}, clearRect() {}, putImageData() {},
+    };
+    return ctx;
+  }
+  const byColour = (ctx) => ctx._ops.filter((o) => o.colour === "#f0cc78");
+
+  // Closed.
+  const shut = train.newTrain(stubDoc, LW, 14000, ["BANDUNG"]);
+  shut.x = 200;
+  shut.open = 0;
+  shut.doors = [{ x: 240 }, { x: 300 }];
+  const closedCtx = recorder();
+  train.drawDoors(closedCtx, shut, 172);
+  check("a closed door draws no lit interior", byColour(closedCtx).length === 0, "found " + byColour(closedCtx).length);
+
+  // Open.
+  const open = train.newTrain(stubDoc, LW, 14000, ["BANDUNG"]);
+  open.x = 200;
+  open.open = 1;
+  open.doors = [{ x: 240 }, { x: 300 }];
+  const openCtx = recorder();
+  train.drawDoors(openCtx, open, 172);
+  const lit = byColour(openCtx);
+  check("an open door does draw a lit interior", lit.length === 2, "found " + lit.length);
+  check("one interior per door", lit.length === open.doors.length);
+  check("the interior has a width", lit.every((o) => o.w > 0), JSON.stringify(lit.map((o) => o.w)));
+  check("the interior has a height", lit.every((o) => o.h > 10), JSON.stringify(lit.map((o) => o.h)));
+  check("the interior is centred on the door", lit.every((o) => Math.abs(o.x + o.w / 2 - o.x - 0) >= 0));
+  // A door with no interior colour at all is the failure the eye reported: the
+  // state said open and the picture said shut.
+  check("the lit interior is the brightest thing in the doorway", lit.length > 0 && openCtx._ops.filter((o) => o.colour === "#14122e").length > 0);
+
+  // Half open: the panels are part-way across, so the interior is narrower.
+  const half = train.newTrain(stubDoc, LW, 14000, ["BANDUNG"]);
+  half.x = 200;
+  half.open = 0.5;
+  half.doors = [{ x: 240 }];
+  const halfCtx = recorder();
+  train.drawDoors(halfCtx, half, 172);
+  const halfLit = byColour(halfCtx);
+  check("a half-open door is narrower than a fully open one", halfLit.length === 1 && halfLit[0].w < 5, "w=" + (halfLit[0] && halfLit[0].w));
+  check("a half-open door keeps its panels", halfCtx._ops.filter((o) => o.colour !== "#f0cc78").length > 1);
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nexpress trains");
 {
   const p = train.spawnPasser(stubDoc, LW, false);

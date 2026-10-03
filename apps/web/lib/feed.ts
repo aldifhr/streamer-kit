@@ -137,8 +137,18 @@ export function useFeed(overlayId: string): Feed {
           return;
         }
         if (type === "viewers") {
+          // Set the header number and then keep going.
+          //
+          // The `return` that used to be here is why a live room with three
+          // thousand watching rendered a village. This branch runs before
+          // `FROM_WIRE`, so returning consumed the frame as a header value and
+          // stopped it there: it never became an entry, so no kind filter ever
+          // saw it and the city could not have read it however it subscribed.
+          //
+          // Two earlier fixes were real and neither was the cause — a `viewers`
+          // mapping that did not exist, and a city that did not subscribe to
+          // the kind. Both are correct and both were downstream of this.
           setViewers(Number(data.count) || 0);
-          return;
         }
 
         const build = FROM_WIRE[type];

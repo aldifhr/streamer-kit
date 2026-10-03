@@ -20,6 +20,7 @@ const path = require("node:path");
 const OUT = path.resolve(__dirname, "../../../node_modules/.cache/stream-kit/feed-contract");
 const { FROM_WIRE } = require(path.join(OUT, "lib", "feed-wire.js"));
 const { selectKinds } = require(path.join(OUT, "lib", "widgets", "select.js"));
+const fs = require("node:fs");
 
 let passed = 0;
 function check(label, cond, detail = "") {
@@ -102,6 +103,37 @@ console.log("the filter drops nothing the city needs");
     const kept = selectKinds([entry], KINDS);
     check(`${kind} arrives`, kept.length === 1, `filtered out`);
   }
+}
+
+console.log("the frame survives the socket handler itself");
+{
+  // This is where it actually broke, and neither fix above could have caught it.
+  //
+  // `feed.ts` handled `viewers` by setting the header number and returning. That
+  // return sits above `FROM_WIRE`, so the frame was consumed as a header value
+  // and never became an entry — no mapping mattered, no subscription mattered. A
+  // test starting at `FROM_WIRE` cannot see a frame that never reaches it, so
+  // this one reads the handler's own source and fails if a branch above the
+  // builder can return.
+  const src = fs.readFileSync(path.resolve(__dirname, "../lib/feed.ts"), "utf8");
+  const handler = src.slice(src.indexOf("onmessage"));
+  const viewersBranch = handler.indexOf('type === "viewers"');
+  const builder = handler.indexOf("FROM_WIRE[type]");
+
+  check("the handler has a viewers branch", viewersBranch !== -1);
+  check("and the builder comes after it", builder !== -1 && builder > viewersBranch,
+    `viewers at ${viewersBranch}, builder at ${builder}`);
+
+  // Comments are stripped first: a comment explaining that a `return` used to be
+  // here is exactly the kind of text that must not be mistaken for one.
+  const between = handler.slice(viewersBranch, builder)
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, ""))
+    .join("\n");
+  check("the viewers branch does not return", !/\breturn\b/.test(between),
+    `found a return above the builder:\n${between.trim()}`);
+  check("it still sets the header number", /setViewers\(/.test(between),
+    "the header count should not have been dropped to fix this");
 }
 
 console.log("an empty kinds list is not a silent success");

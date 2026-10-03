@@ -22,6 +22,23 @@ import type { CityConfig } from "./config";
  */
 const MIN_PEOPLE = 16;
 
+/**
+ * `?debug=1` on the overlay turns the decision log on, whatever the scene says.
+ *
+ * The flag in the style map alone was not enough, and that was the whole point:
+ * the log is what you reach for when the city is wrong, and reaching for it
+ * required a live broadcast change to save first. The scene's own setting still
+ * applies — this only ever turns it on.
+ */
+function debugAskedFor(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).get("debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function toConfig(style: Record<string, string | number | boolean | undefined>): Partial<CityConfig> {
   /**
    * Reads a numeric style, falling back when the field is not actually a number.
@@ -64,7 +81,7 @@ export function toConfig(style: Record<string, string | number | boolean | undef
     // Off unless asked for: this one draws text down the side of the overlay, and
     // an overlay that quietly grew a debug panel would be showing it to every
     // viewer on the stream.
-    debug: b("debug", false),
+    debug: b("debug", false) || debugAskedFor(),
     showLabels: b("show-labels", true),
     cityName: String(style["city-name"] ?? ""),
     partyGift: n("party-gift", 500),

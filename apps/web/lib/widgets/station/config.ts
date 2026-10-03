@@ -108,13 +108,14 @@ export function toStationConfig(
   const dayLen = num(style["day-len"], d.dayLen, 30, 3600);
   if (dayLen !== d.dayLen) out.dayLen = dayLen;
 
-  if (style["freeze-clock"] === true || style["freeze-clock"] === "true") {
-    const hour = num(style["pinned-hour"], 0.3, 0, 0.99);
-    if (hour !== 0.3) out.pinnedHour = hour;
-    else out.pinnedHour = hour;
-  } else if (style["pinned-hour"] !== undefined && style["pinned-hour"] !== "") {
-    // A pinned hour without the toggle is still a pin: honouring one field and
-    // ignoring the other is how a setting ends up looking broken.
+  // Only the toggle freezes the clock.
+  //
+  // It was reading the hour field on its own as well, and that field is never
+  // absent: the widget ships `pinned-hour: 0.3` in its defaults, so every scene
+  // carries it whether anyone has touched the slider. The result was a station
+  // permanently parked at 13:12 with the toggle off, the hour slider live and
+  // doing nothing, and the day-length slider dead too.
+  if (style["freeze-clock"] === true || style["freeze-clock"] === "true" || style["freeze-clock"] === "on") {
     out.pinnedHour = num(style["pinned-hour"], 0.3, 0, 0.99);
   }
 

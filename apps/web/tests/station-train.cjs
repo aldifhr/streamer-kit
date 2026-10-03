@@ -117,6 +117,17 @@ console.log("\nconfig");
 
   const pinned = toStationConfig({ "freeze-clock": "true", "pinned-hour": "0.8" });
   check("freeze plus an hour pins it", pinned.pinnedHour === 0.8, JSON.stringify(pinned));
+
+  // The regression this exists for. `pinned-hour` is in the widget's defaults,
+  // so it is present in every scene whether or not anyone has touched the
+  // slider. Reading it without consulting the toggle parked the clock at 13:12
+  // forever, with the toggle off and the day-length slider doing nothing.
+  const untouched = toStationConfig({ "pinned-hour": 0.3 });
+  check("an untouched default hour does not freeze the clock", untouched.pinnedHour === undefined, JSON.stringify(untouched));
+  const toggledOff = toStationConfig({ "freeze-clock": "false", "pinned-hour": 0.3 });
+  check("toggle off does not freeze the clock", toggledOff.pinnedHour === undefined, JSON.stringify(toggledOff));
+  const noFields = toStationConfig({});
+  check("no clock fields means no pin", noFields.pinnedHour === undefined, JSON.stringify(noFields));
 }
 
 // ---------------------------------------------------------------------------

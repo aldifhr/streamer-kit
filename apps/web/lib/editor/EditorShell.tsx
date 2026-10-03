@@ -122,14 +122,13 @@ const WEIGHT_OPTIONS = [
 ];
 
 export /**
- * Whether this build can actually connect to YouTube.
+ * Whether this build can connect to YouTube.
  *
- * The picker ships ahead of the source on purpose: choosing a platform is the
- * decision, and the editor should be able to hold that state before there is
- * anything to connect to. The backend answers a request for a source it does
- * not have with a plain error, so the button says so rather than pretending.
+ * The source needs `YOUTUBE_API_KEY` on the backend, and an operator who has not
+ * added one yet would see a button that only ever fails. The warning below says
+ * so plainly instead of letting the connect attempt explain it.
  */
-const YOUTUBE_READY = false;
+const YOUTUBE_READY = true;
 
 export function EditorShell({ overlayId }: { overlayId: string }) {
   const [config, setConfig] = useState<SceneConfig>(() => defaultScene());
@@ -731,8 +730,9 @@ const activeWidget = config.widgets[0] ?? null;
                     </div>
                     {source === "youtube" && !YOUTUBE_READY && (
                       <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
-                        YouTube is not available in this backend build yet — picking it will stop the
-                        connection rather than quietly falling back to TikTok.
+                        YouTube needs <code>YOUTUBE_API_KEY</code> on the backend. Without it the
+                        source refuses to connect and says why — it will not quietly fall back to
+                        TikTok.
                       </p>
                     )}
                     <label className="mb-1.5 block text-xs text-neutral-500">

@@ -9,8 +9,10 @@ normalised events instead of building wire dicts inline.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
+from sources.viewers_count import judge
 from events import COMMENT, FOLLOW, GIFT, JOIN, LIKE, SHARE, VIEWERS, Event, dispatch, emit_error, emit_status
 
 # TikTok substitutes these when a viewer's profile is unavailable or deleted.
@@ -40,11 +42,17 @@ def display_id(user: Any) -> str:
     return (getattr(user, "username", "") or "").strip()
 
 
+logger = logging.getLogger("streamkit.tiktok")
+
+
 class TikTokSource:
     def __init__(self, username: str, overlay_id: str) -> None:
         self.username = username
         self.overlay_id = overlay_id
         self._client = None
+        # The previous audience figure, so an implausible jump can be called out
+        # rather than silently driving the city's size.
+        self._last_viewers = 0
         # _running means "a connection was attempted"; _connected means the
         # WebSocket handshake with TikTok actually completed. Reporting the
         # latter is what makes a newly-attached client's status honest.
@@ -201,7 +209,16 @@ class TikTokSource:
             # Only `count` goes out. `events._viewers` forwards that one field,
             # so sending the other three would mean carrying them this far to
             # drop them there, with nothing on either side reading them.
-            dispatch(self.overlay_id, Event(kind=VIEWERS, meta={"count": event.total}))
+            # The decision — in range, implausible, a jump worth reporting —
+            # lives in `viewers_count.judge`, because the handler is a nested
+            # function and nothing could test it where it lived.
+            verdict = judge(event.total, self._last_viewers, event.total_user)
+            self._last_viewers = verdict.last
+            if verdict.warning:
+                logger.warning(verdict.warning)
+            if verdict.count is None:
+                return
+            dispatch(self.overlay_id, Event(kind=VIEWERS, meta={"count": verdict.count}))
 
         # Social events are registered as the concrete subclasses rather than
         # SocialEvent: TikTokLive matches handlers on the emitted class, and a

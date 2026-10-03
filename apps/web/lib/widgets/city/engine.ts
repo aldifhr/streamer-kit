@@ -99,7 +99,7 @@ interface Resident {
   enterT: number;
   exitPhase: number;
   exitT: number;
-  exitMode: "edge" | "door";
+  exitMode: "edge" | "door" | "bus";
   door: Door | null;
   lastActive: number;
   bubble: string;
@@ -796,6 +796,20 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     p.state = "exit";
     p.exitPhase = 0;
     p.exitT = 0;
+    // Three ways out, because a person who vanishes where they stand reads as a
+    // glitch. Into a shop, onto a bus at the stop, or off the edge of the street
+    // — and the bus is the one that looks like leaving, because a stop is where
+    // you go when you are finished.
+    if (Math.random() < 0.3) {
+      const stop = activities.shelter(p);
+      if (stop) {
+        p.exitMode = "bus";
+        p.tx = clamp(stop.x, 4, LW - 4);
+        p.ty = stop.y;
+        inspector.push("leave", `${p.name} jalan ke halte`, performance.now());
+        return;
+      }
+    }
     if (layout.doors.length > 0 && Math.random() < 0.65) {
       let best: Door | null = null, bd = 1e9;
       for (const d of layout.doors) {
@@ -886,6 +900,12 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
             p.exitPhase = 1;
             p.exitT = 0;
             p.door.openUntil = now + 1400;
+          } else if (p.exitMode === "bus") {
+            // Standing at the stop for a beat before going. The wait is the
+            // point: it is what separates boarding a bus from blinking out.
+            p.exitPhase = 1;
+            p.exitT = -1.1;
+            p.moving = false;
           } else {
             people.delete(p.id);
             return;
@@ -897,9 +917,14 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
       } else {
         p.exitT += dt;
         p.dissolve = 1 - clamp(p.exitT / 0.9, 0, 1);
-        p.y -= 5 * dt;
-        p.moving = true;
-        p.dir = 1;
+        // The upward drift is a puff for someone stepping through a door. On a
+        // bus you board and are simply not there any more; drifting up there
+        // would look like being lifted off the street.
+        if (p.exitMode !== "bus") {
+          p.y -= 5 * dt;
+          p.moving = true;
+          p.dir = 1;
+        }
         if (p.exitT > 0.95) {
           people.delete(p.id);
           return;

@@ -16,6 +16,7 @@ const path = require("node:path");
 
 const OUT = path.resolve(__dirname, "../../../node_modules/.cache/stream-kit/city/lib/widgets/city");
 const { createInspector, formatAge, MAX_NOTES } = require(path.join(OUT, "inspector.js"));
+const fs = require("node:fs");
 
 let passed = 0;
 function check(label, cond, detail = "") {
@@ -94,6 +95,29 @@ console.log("the buffer does not decide what is worth recording");
   check("every push is recorded", ins.size() === 50, `got ${ins.size()}`);
   check("including identical repeats", ins.notes()[1].text === "penonton 2", `got ${ins.notes()[1].text}`);
   check("and each one is counted", ins.tally().audience === 50, `got ${ins.tally().audience}`);
+}
+
+console.log("leaving is a journey, not a blink");
+{
+  // A resident who vanishes where they stand reads as a glitch, whatever the
+  // code intended. These hold the three exits to being visible departures:
+  // walking somewhere, then being gone only once they have arrived.
+  const src = fs.readFileSync(
+    path.resolve(__dirname, "../lib/widgets/city/engine.ts"), "utf8");
+
+  check("there is a bus exit at all", /exitMode = "bus"/.test(src),
+    "someone leaving should be able to walk to the stop");
+  check("and it is a declared mode", /exitMode: "edge" \| "door" \| "bus"/.test(src),
+    "a mode the type does not allow is dead code");
+  check("boarding waits before the resident is gone", /exitT = -1\.1/.test(src),
+    "walking to the stop and vanishing is the same blink with extra steps");
+  check("the bus is the stop, not an empty spot",
+    /activities\.shelter\(p\)/.test(src), "the destination should be the shelter");
+  check("and boarding does not drift upward",
+    /if \(p\.exitMode !== "bus"\) \{\s*\n\s*p\.y -= 5 \* dt/.test(src),
+    "rising on a bus looks like being lifted off the street");
+  check("the log says which way they left", /jalan ke halte/.test(src),
+    "a log that cannot name the departure cannot explain it");
 }
 
 console.log("ages read at a glance");

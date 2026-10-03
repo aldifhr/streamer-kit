@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SOURCE_CHANNEL_LABEL, SOURCE_LABELS, loadedIdentity } from "./scene-load";
-import type { SourceKind } from "./scene-load";
+import { loadedIdentity } from "./scene-load";
 import Link from "next/link";
 import { apiFetch, wsUrl } from "@/lib/api";
 import { append, clock, summariseEvent, type LogLine } from "@/lib/socket-log";
@@ -121,20 +120,10 @@ const WEIGHT_OPTIONS = [
   { value: "700", label: "Bold" },
 ];
 
-export /**
- * Whether this build can connect to YouTube.
- *
- * The source needs `YOUTUBE_API_KEY` on the backend, and an operator who has not
- * added one yet would see a button that only ever fails. The warning below says
- * so plainly instead of letting the connect attempt explain it.
- */
-const YOUTUBE_READY = true;
-
 export function EditorShell({ overlayId }: { overlayId: string }) {
   const [config, setConfig] = useState<SceneConfig>(() => defaultScene());
   const [saved, setSaved] = useState<SceneConfig>(() => defaultScene());
   const [username, setUsername] = useState("");
-  const [source, setSource] = useState<SourceKind>("tiktok");
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   // Opens on Widgets, not Theme. The theme only restyles the chat widget and
@@ -224,7 +213,6 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
         setSaved(scene);
         const identity = loadedIdentity(data);
         setUsername(identity.username);
-        setSource(identity.source);
         setError(identity.error);
         setLoading(false);
       })
@@ -343,32 +331,10 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       await apiFetch(`/api/overlays/${overlayId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: trimmed, source }),
+        body: JSON.stringify({ username: trimmed }),
       }).catch(() => {});
     },
-    [overlayId, source],
-  );
-
-  /**
-   * Switching platform repoints the room, so the running source has to go.
-   *
-   * Left alone it would keep streaming the old platform's events into an
-   * overlay that now says YouTube, which is the worst of both: a live-looking
-   * feed that is pointed at the wrong room.
-   */
-  const onSourcePick = useCallback(
-    async (next: SourceKind) => {
-      if (next === source) return;
-      setSource(next);
-      await apiFetch(`/api/overlays/${overlayId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: next }),
-      }).catch(() => {});
-      setStatus("idle");
-      setError(null);
-    },
-    [source, overlayId],
+    [overlayId],
   );
 
   const connect = useCallback(async () => {
@@ -380,7 +346,7 @@ export function EditorShell({ overlayId }: { overlayId: string }) {
       const res = await apiFetch("/api/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), source, overlay_id: overlayId }),
+        body: JSON.stringify({ username: username.trim(), overlay_id: overlayId }),
       });
       // Named explicitly, because the generic message for a 401 is "connect
       // failed" and the actual cause is a build-time env mismatch that no
@@ -706,38 +672,7 @@ const activeWidget = config.widgets[0] ?? null;
 
                 {section === "channel" && (
                   <div>
-                    {/* Platform first, because it changes what the field below
-                        it means. A TikTok handle and a YouTube channel are both
-                        strings, so getting this wrong looks exactly like
-                        choosing a channel that does not exist. */}
-                    <label className="mb-1.5 block text-xs text-neutral-500">Platform</label>
-                    <div className="mb-4 flex gap-1.5">
-                      {(["tiktok", "youtube"] as SourceKind[]).map((k) => (
-                        <button
-                          key={k}
-                          onClick={() => void onSourcePick(k)}
-                          aria-pressed={source === k}
-                          className={
-                            "flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition " +
-                            (source === k
-                              ? "border-white/40 bg-white/10 text-white"
-                              : "border-white/20 text-neutral-400 hover:bg-white/5 hover:text-neutral-200")
-                          }
-                        >
-                          {SOURCE_LABELS[k]}
-                        </button>
-                      ))}
-                    </div>
-                    {source === "youtube" && !YOUTUBE_READY && (
-                      <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
-                        YouTube needs <code>YOUTUBE_API_KEY</code> on the backend. Without it the
-                        source refuses to connect and says why — it will not quietly fall back to
-                        TikTok.
-                      </p>
-                    )}
-                    <label className="mb-1.5 block text-xs text-neutral-500">
-                      {SOURCE_CHANNEL_LABEL[source]}
-                    </label>
+                    <label className="mb-1.5 block text-xs text-neutral-500">TikTok username</label>
                     <div className="flex gap-2">
                       <input
                         value={username}
@@ -746,7 +681,7 @@ const activeWidget = config.widgets[0] ?? null;
                         onKeyDown={(e) => {
                           if (e.key === "Enter") e.currentTarget.blur();
                         }}
-                        placeholder={source === "youtube" ? "channel name" : "channel"}
+                        placeholder="channel"
                         className={inputCls}
                       />
                       {status === "connected" ? (

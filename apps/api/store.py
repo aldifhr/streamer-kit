@@ -69,33 +69,11 @@ def get_overlay(overlay_id: str) -> dict[str, Any] | None:
         return copy.deepcopy(record) if record else None
 
 
-# Which platform a channel lives on.
-#
-# Every overlay had a bare `username`, which is fine until it is not: a TikTok
-# handle and a YouTube channel name are both strings, so picking the wrong
-# platform looks exactly like picking a channel that does not exist. The source
-# is stored beside the name rather than inferred from it, because there is
-# nothing in "nila" to infer from.
-SOURCES = ("tiktok", "youtube")
-
-
-def normalise_source(raw: Any) -> str:
-    """Folds a source name to one this build knows, defaulting to TikTok.
-
-    An unrecognised value becomes TikTok rather than an error. That is the
-    safer of the two failures for a stored config written by an older build,
-    and the wrong guess is visible on the overlay rather than silent in a log.
-    """
-    v = str(raw or "").strip().lower()
-    return v if v in SOURCES else "tiktok"
-
-
 def create_overlay(name: str, config: dict[str, Any]) -> dict[str, Any]:
     overlay_id = str(uuid.uuid4())
     record = {
         "name": name,
         "username": "",
-        "source": "tiktok",
         "config": config,
         "createdAt": time.time(),
     }
@@ -110,7 +88,6 @@ def update_overlay(
     *,
     name: str | None = None,
     username: str | None = None,
-    source: str | None = None,
 ) -> dict[str, Any] | None:
     with _lock:
         record = _record(overlay_id)
@@ -120,8 +97,6 @@ def update_overlay(
             record["name"] = name
         if username is not None:
             record["username"] = username
-        if source is not None:
-            record["source"] = normalise_source(source)
         _flush()
         return copy.deepcopy(record)
 
@@ -149,10 +124,3 @@ def username_of(overlay_id: str) -> str:
     with _lock:
         record = _record(overlay_id)
         return str(record.get("username", "")) if record else ""
-
-
-def source_of(overlay_id: str) -> str:
-    """The stored platform for an overlay, or TikTok when there is no record."""
-    with _lock:
-        record = _record(overlay_id)
-        return normalise_source(record.get("source")) if record else "tiktok"

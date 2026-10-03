@@ -40,16 +40,14 @@ def check(label, cond, detail=""):
 
 
 calls: list[tuple[str, str]] = []
-restored_sources: list[str | None] = []
 
 
-async def fake_connect(overlay_id: str, username: str, source_name: str | None = None) -> dict:
+async def fake_connect(overlay_id: str, username: str) -> dict:
     # Async because `restore_sources` awaits it. A synchronous fake failed with
     # "object dict can't be used in 'await' expression" on every call, which made
     # the "one room failing" case pass for the wrong reason — the healthy rooms
     # were failing too, just with a different error.
     calls.append((overlay_id, username))
-    restored_sources.append(source_name)
     return {"status": "connecting", "username": username, "overlay_id": overlay_id}
 
 
@@ -65,7 +63,7 @@ original_cache = store._cache
 print("nothing stored means nothing to restore")
 with_overlays({})
 calls.clear()
-restored_sources.clear()
+
 restored = asyncio.run(main.restore_sources())
 check("no channels, no reconnects", calls == [], f"called {calls}")
 check("and it reports nothing", restored == [], f"got {restored}")
@@ -76,17 +74,17 @@ with_overlays({
     "ov-idle": {"id": "ov-idle", "username": "", "config": {}},
 })
 calls.clear()
-restored_sources.clear()
+
 restored = asyncio.run(main.restore_sources())
 check("only the aimed one is reconnected", calls == [("ov-live", "room.live")], f"called {calls}")
 # The report carries the platform: at a glance on a boot log, which room is on
 # which source is the first thing anyone asks.
-check("and it is reported", restored == ["ov-live@tiktok:room.live"], f"got {restored}")
+check("and it is reported", restored == ["ov-live@room.live"], f"got {restored}")
 
 print("a leading @ does not change the channel")
 with_overlays({"ov": {"id": "ov", "username": "@room.live", "config": {}}})
 calls.clear()
-restored_sources.clear()
+
 asyncio.run(main.restore_sources())
 check("the @ is stripped", calls == [("ov", "room.live")], f"called {calls}")
 
@@ -98,7 +96,7 @@ with_overlays({
     "d": {"id": "d", "username": None},
 })
 calls.clear()
-restored_sources.clear()
+
 restored = asyncio.run(main.restore_sources())
 check("nothing blank is connected", calls == [], f"called {calls}")
 check("and nothing blank is reported", restored == [], f"got {restored}")
@@ -111,7 +109,7 @@ with_overlays({
 })
 
 
-async def half_broken(overlay_id: str, username: str, source_name: str | None = None) -> dict:
+async def half_broken(overlay_id: str, username: str) -> dict:
     calls.append((overlay_id, username))
     if overlay_id == "ov-bad":
         raise RuntimeError("TikTok refused the connection")
@@ -120,7 +118,7 @@ async def half_broken(overlay_id: str, username: str, source_name: str | None = 
 
 main._connect_room = half_broken  # type: ignore[assignment]
 calls.clear()
-restored_sources.clear()
+
 restored = asyncio.run(main.restore_sources())
 check("the healthy ones still come back",
       ("ov-a", "a.room") in calls and ("ov-c", "c.room") in calls, f"called {calls}")
@@ -138,7 +136,7 @@ main._connect_room = fake_connect  # type: ignore[assignment]
 real_all = store.all_overlays
 store.all_overlays = unreadable  # type: ignore[assignment]
 calls.clear()
-restored_sources.clear()
+
 try:
     restored = asyncio.run(main.restore_sources())
     check("it survives", restored == [], f"got {restored}")

@@ -76,23 +76,6 @@ async def lifespan(app: FastAPI):
     sources.clear()
 
 
-def build_source(source_name: str, username: str, overlay_id: str):
-    """The source class for a platform name.
-
-    Kept in one place so the editor's picker, the reconnect endpoint and the
-    boot-time restore cannot disagree about what "youtube" means.
-    """
-    if source_name == "youtube":
-        try:
-            from sources.youtube import YouTubeSource
-        except ImportError as exc:  # noqa: BLE001 — reported, not guessed around
-            raise RuntimeError(
-                "youtube source is not available in this build; set the overlay back to tiktok"
-            ) from exc
-        return YouTubeSource(username, overlay_id)
-    return TikTokSource(username, overlay_id)
-
-
 async def restore_sources() -> list[str]:
     """Reconnect every overlay with a stored channel. Returns what came back."""
     restored: list[str] = []
@@ -107,9 +90,8 @@ async def restore_sources() -> list[str]:
         if not username:
             continue
         try:
-            source_name = store.normalise_source(record.get("source"))
-            await _connect_room(overlay_id, username, source_name)
-            restored.append(f"{overlay_id}@{source_name}:{username}")
+            await _connect_room(overlay_id, username)
+            restored.append(f"{overlay_id}@{username}")
         except Exception as exc:  # noqa: BLE001 — one room must not block the rest
             logger.warning("could not restore %s (%s): %s", overlay_id, username, exc)
     if restored:
@@ -191,9 +173,6 @@ async def guard_mutations(request: Request, call_next):
 
 
 class ConnectRequest(BaseModel):
-    # Optional: an overlay with no stored source is TikTok, which is what every
-    # overlay written before the picker existed already was.
-    source: str = ""
     # Optional because /api/disconnect is posted with only an overlay id, and
     # this used to be required — which made disconnect answer 422 and left the
     # editor's Stop button silently doing nothing. /api/connect validates it.
@@ -215,7 +194,6 @@ class CreateOverlayRequest(BaseModel):
 class UpdateOverlayRequest(BaseModel):
     name: str | None = None
     username: str | None = None
-    source: str | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -269,7 +247,6 @@ def _summary(overlay_id: str, record: dict[str, Any]) -> dict[str, Any]:
         "id": overlay_id,
         "name": record.get("name", "Untitled"),
         "username": record.get("username", ""),
-        "source": store.normalise_source(record.get("source")),
         "theme": config.get("theme", DEFAULT_OVERLAY_CONFIG["theme"]),
         "config": config,
         "createdAt": record.get("createdAt", 0),
@@ -291,38 +268,23 @@ async def create_overlay(req: CreateOverlayRequest):
 
 @router.patch("/api/overlays/{overlay_id}")
 async def update_overlay(overlay_id: str, req: UpdateOverlayRequest):
-    # Switching platform counts as repointing the room, exactly like changing
-    # the handle: the running source is listening to the wrong place either way.
-    target_changed = False
+    username_changed = False
     if req.username is not None:
+        current = store.username_of(overlay_id)
         incoming = req.username.strip().lstrip("@")
-        target_changed = incoming != store.username_of(overlay_id)
-    if req.source is not None:
-        incoming_source = store.normalise_source(req.source)
-        if incoming_source != store.source_of(overlay_id):
-            # An unknown platform is a typo worth answering, not a thing to
-            # quietly substitute. TikTok is the default for records written
-            # before the picker existed, and guessing here would connect a
-            # YouTube channel to TikTok and report it as working.
-            if incoming_source != req.source.strip().lower():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"unknown source {req.source!r}; expected one of {', '.join(store.SOURCES)}",
-                )
-            target_changed = True
+        username_changed = incoming != current
 
     record = store.update_overlay(
         overlay_id,
         name=req.name.strip() if req.name is not None else None,
         username=req.username.strip().lstrip("@") if req.username is not None else None,
-        source=req.source if req.source is not None else None,
     )
     if record is None:
         raise HTTPException(status_code=404, detail="Overlay not found")
 
-    # A different target means the running source is pointed at the wrong room,
-    # so drop it; the overlay page re-requests the connection on reload.
-    if target_changed:
+    # A different username means the running source is pointed at the wrong
+    # room, so drop it; the overlay page re-requests the connection on reload.
+    if username_changed:
         source = sources.get(overlay_id)
         if source is not None and source.is_running():
             await source.stop()
@@ -385,7 +347,7 @@ async def overlay_connect(overlay_id: str):
             status_code=409,
             detail="overlay has no username configured; set one in the editor",
         )
-    return await _connect_room(overlay_id, username, req.source or None)
+    return await _connect_room(overlay_id, username)
 
 
 @router.post("/api/connect")
@@ -394,38 +356,18 @@ async def connect(req: ConnectRequest):
     username = req.username.strip().lstrip("@")
     if not username:
         raise HTTPException(status_code=400, detail="username is required")
-    # Refused rather than folded. The store folds an unknown source to TikTok so
-    # a config file written by an older build still reads, but a request from the
-    # editor saying "twitch" is a typo or a version that is ahead of the backend,
-    # and substituting TikTok there would connect a YouTube channel to TikTok and
-    # report it as live.
-    if req.source and req.source.strip().lower() not in store.SOURCES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"unknown source {req.source!r}; expected one of {', '.join(store.SOURCES)}",
-        )
-    return await _connect_room(overlay_id, username, req.source or None)
+    return await _connect_room(overlay_id, username)
 
 
-async def _connect_room(overlay_id: str, username: str, source_name: str | None = None) -> dict:
+async def _connect_room(overlay_id: str, username: str) -> dict:
     """Point the one global room at `username`, replacing any previous source.
 
     Shared by the session-gated /api/connect and the config-scoped
     /api/overlay-connect, so the two cannot drift apart in how they start or
     report a source.
-
-    `source_name` picks the platform. When it is omitted the overlay's stored
-    choice is used, so a reconnect that only knows the handle still connects to
-    the right room rather than to TikTok by default.
     """
-    source_name = store.normalise_source(source_name if source_name is not None else store.source_of(overlay_id))
     existing = sources.get(overlay_id)
-    if (
-        existing
-        and existing.is_running()
-        and existing.username == username
-        and getattr(existing, "source_name", "tiktok") == source_name
-    ):
+    if existing and existing.is_running() and existing.username == username:
         # Idempotent path. The ConnectEvent for this source already fired
         # earlier, so anyone attaching now would otherwise never learn the
         # current state — push it explicitly.
@@ -433,7 +375,6 @@ async def _connect_room(overlay_id: str, username: str, source_name: str | None 
         return {
             "status": "already-connected",
             "username": existing.username,
-            "source": source_name,
             "overlay_id": overlay_id,
             **existing.status_payload(),
         }
@@ -441,10 +382,10 @@ async def _connect_room(overlay_id: str, username: str, source_name: str | None 
     if existing:
         await existing.stop()
 
-    source = build_source(source_name, username, overlay_id)
+    source = TikTokSource(username, overlay_id)
     sources[overlay_id] = source
     source.start_background()
-    return {"status": "connecting", "username": username, "source": source_name, "overlay_id": overlay_id}
+    return {"status": "connecting", "username": username, "overlay_id": overlay_id}
 
 
 @router.post("/api/disconnect")

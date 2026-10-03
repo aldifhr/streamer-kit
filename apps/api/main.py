@@ -26,6 +26,8 @@ from events import ALERT, Event
 from hub import OVERLAY, hub
 from sources import TikTokSource
 
+logger = logging.getLogger("streamkit.api")
+
 # Only the theme id lives here. Every other style default is owned by the
 # frontend (apps/web/lib/widgets) so the two can't drift apart — an earlier
 # version mirrored the full schema here and silently overrode the frontend
@@ -59,10 +61,42 @@ sources: dict[str, TikTokSource] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Re-aim every overlay that was pointed at a room when the process last went
+    # down.
+    #
+    # A restart used to leave every live stream dead until somebody noticed and
+    # called the reconnect endpoint by hand. The channel is already stored per
+    # overlay — it is what the editor writes — so nothing new is needed here, only
+    # for it to be acted on at boot. A room that fails to come back is logged and
+    # left alone: it must not stop the others, and it must not crash the API.
+    await restore_sources()
     yield
     for source in list(sources.values()):
         await source.stop()
     sources.clear()
+
+
+async def restore_sources() -> list[str]:
+    """Reconnect every overlay with a stored channel. Returns what came back."""
+    restored: list[str] = []
+    try:
+        records = store.all_overlays()
+    except Exception as exc:  # noqa: BLE001 — a bad config file must not stop the API
+        logger.warning("could not read stored overlays for restore: %s", exc)
+        return restored
+
+    for overlay_id, record in records.items():
+        username = str(record.get("username", "") or "").strip().lstrip("@")
+        if not username:
+            continue
+        try:
+            await _connect_room(overlay_id, username)
+            restored.append(f"{overlay_id}@{username}")
+        except Exception as exc:  # noqa: BLE001 — one room must not block the rest
+            logger.warning("could not restore %s (%s): %s", overlay_id, username, exc)
+    if restored:
+        logger.info("restored %d source(s) on boot: %s", len(restored), ", ".join(restored))
+    return restored
 
 
 app = FastAPI(title="StreamKit", lifespan=lifespan)

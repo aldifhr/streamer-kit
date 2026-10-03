@@ -15,6 +15,7 @@
   },
   "files": [
     "../lib/widgets/station/engine.ts",
+    "../lib/widgets/city/audience.ts",
     "../lib/widgets/station/config.ts",
     "../lib/widgets/station/train.ts",
     "../lib/widgets/station/scene.ts"

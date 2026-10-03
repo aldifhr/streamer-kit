@@ -87,10 +87,14 @@ export const stationWidget: WidgetType = {
   id: "station",
   label: "Station",
   icon: "🚉",
-  blurb: "A pixel train station. Viewers arrive and leave by train, and gifts run expresses past.",
+  blurb: "A pixel train station. Longer trains and busier platforms as the room fills, and gifts run expresses past.",
   unique: true,
   fill: true,
-  kinds: ["comment", "like", "gift", "join", "follow", "share"],
+  // `viewers` is what sizes the station: how long the train is, how often it
+  // comes, and how many background passengers are waiting. Left out of this list
+  // the scene never learns how many people are watching, which is the one
+  // number it exists to reflect.
+  kinds: ["viewers", "comment", "like", "gift", "join", "follow", "share"],
   defaults: {
     "max-people": 30,
     "leave-after": 300,

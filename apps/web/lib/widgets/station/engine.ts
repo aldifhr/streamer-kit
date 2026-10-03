@@ -29,6 +29,7 @@ import type { Emote, Look, Pose } from "../city/sprites";
 import { drawPartsOn, mk, plateOn, txtOn, txtOutlineOn } from "../city/scenery";
 import type { Ctx } from "../city/scenery";
 import { DEFAULT_STATION_CONFIG, RANKS, RANK_XP } from "./config";
+import { audienceTier, easeAudience, formatAudience, settledTier } from "../city/audience";
 import type { StationConfig } from "./config";
 import {
   CAR_H,
@@ -47,8 +48,10 @@ import {
 } from "./scene";
 import type { Prop, StationLayout, StationScene } from "./scene";
 import {
+  ambientFor,
   drawBannerOn,
   drawCars,
+  gapFor,
   drawDoors,
   drawPasserLights,
   drawTrainLights,
@@ -58,6 +61,7 @@ import {
   spawnPasser,
   updatePasser,
   updateTrain,
+  carsFor,
 } from "./train";
 import type { Passer, Train } from "./train";
 
@@ -92,6 +96,15 @@ export interface Passenger {
   bubbleUntil: number;
   emote: Emote | null;
   dissolve: number;
+  /**
+   * Background passengers, not viewers.
+   *
+   * They exist so a quiet room still looks like a station, and they are tagged
+   * because two things must never confuse them for people in the room: the
+   * platform cap evicts them before it evicts anyone real, and the head count
+   * never counts them.
+   */
+  ambient: boolean;
 }
 
 interface Coin {
@@ -203,6 +216,17 @@ export function createStationEngine(
   let nextPasser = 0;
   let totalDiamonds = 0;
   let partyUntil = 0;
+  /**
+   * The room's own count, straight from TikTok, and the tier it settles into.
+   *
+   * Same shape as the city's, and for the same reason: the number arrives once
+   * a second and wobbles around its own boundaries, so a raw threshold makes
+   * the train length and the platform crowd flicker. `settledTier` holds it.
+   */
+  let audienceReal = 0;
+  let audienceShown = 0;
+  let bakedTier = audienceTier(0).index;
+  let ambientSeq = 0;
   let todOffset = 0;
   let TOD = cfg.pinnedHour ?? 0.2;
   let KFN = skyAt(TOD);
@@ -291,11 +315,19 @@ export function createStationEngine(
       return hit;
     }
     if (people.size >= cfg.maxPeople) {
+      // Ambient passengers give way first. A background commuter is scenery
+      // and a viewer is not, so when the platform is full the one standing up
+      // and walking into the next train is always one of ours.
       let oldest: Passenger | null = null;
+      let oldestReal: Passenger | null = null;
       for (const o of people.values()) {
-        if (o.state !== "exit" && o.state !== "queued" && (!oldest || o.lastActive < oldest.lastActive)) oldest = o;
+        if (o.state === "exit" || o.state === "queued") continue;
+        if (o.ambient) {
+          if (!oldest || o.lastActive < oldest.lastActive) oldest = o;
+        } else if (!oldestReal || o.lastActive < oldestReal.lastActive) oldestReal = o;
       }
-      if (oldest) startExit(oldest);
+      const victim = oldest || oldestReal;
+      if (victim) startExit(victim);
     }
     const t = now();
     const p: Passenger = {
@@ -326,6 +358,7 @@ export function createStationEngine(
       bubbleUntil: 0,
       emote: null,
       dissolve: 1,
+      ambient: false,
     };
     people.set(id, p);
     // A new arrival pulls a train in. Without this a quiet room sits empty
@@ -512,6 +545,39 @@ export function createStationEngine(
     if (p.state !== "exit") p.y = clamp(p.y, layout.PY0 + 6, LH - 16);
   }
 
+  /**
+   * Keep roughly `ambientFor(tier)` background passengers on the platform.
+   *
+   * They are created through the same queue and the same doors as everyone
+   * else, so they arrive by train and leave by train. A background passenger
+   * that appeared at the edge of the frame would look exactly like the bug
+   * this scene was built to avoid.
+   */
+  function topUpAmbient(): void {
+    const want = ambientFor(bakedTier);
+    let have = 0;
+    for (const p of people.values()) if (p.ambient) have++;
+    for (let i = have; i < want; i++) {
+      const id = "amb-" + ambientSeq++;
+      const p = ensurePerson(id, "PENUMPANG");
+      p.ambient = true;
+      p.name = "PENUMPANG";
+    }
+  }
+
+  /** Sends background passengers home when the room empties out. */
+  function trimAmbient(): void {
+    const want = ambientFor(bakedTier);
+    let have = 0;
+    for (const p of people.values()) if (p.ambient) have++;
+    for (const p of [...people.values()]) {
+      if (p.ambient && have > want && (p.state === "walk" || p.state === "idle")) {
+        have--;
+        startExit(p);
+      }
+    }
+  }
+
   // --- events --------------------------------------------------------------
   function gainXP(p: Passenger, n: number): void {
     p.xp += n;
@@ -525,6 +591,13 @@ export function createStationEngine(
 
   function handle(e: Entry): void {
     const t = now();
+    // The room's own count. Nothing derived from joins or idle timers: this is
+    // the only number here that cannot drift from reality.
+    if (e.kind === "viewers") {
+      const n = Number(e.meta?.count ?? e.value);
+      if (Number.isFinite(n) && n >= 0) audienceReal = Math.round(n);
+      return;
+    }
     const nick = clean(e.user || e.userId || "viewer") || "VIEWER";
     const isNew = !people.has(e.userId);
     const p = ensurePerson(e.userId, nick);
@@ -614,7 +687,7 @@ export function createStationEngine(
   // --- world ---------------------------------------------------------------
   function updateWorld(dt: number, t: number): void {
     if (!train && (t >= nextTrainAt || wantTrain)) {
-      train = newTrain(doc, LW, cfg.dwell * 1000, special || undefined);
+      train = newTrain(doc, LW, cfg.dwell * 1000, special || undefined, bakedTier);
       wantTrain = false;
       special = null;
       say("KERETA JALUR 1 TUJUAN " + train.dest + " SEGERA MASUK");
@@ -628,7 +701,8 @@ export function createStationEngine(
       if (res.announce === "arrived") floatText("TUUT", train.x + (train.dir > 0 ? train.len : 0), layout.TR0 - 34, "#ffffff");
       if (res.departed) {
         train = null;
-        nextTrainAt = t + rand(cfg.trainGapMin, cfg.trainGapMax) * 1000;
+        const [gapLo, gapHi] = gapFor(bakedTier, cfg.trainGapMin, cfg.trainGapMax);
+        nextTrainAt = t + rand(gapLo, gapHi) * 1000;
       }
     }
     for (let i = passers.length - 1; i >= 0; i--) {
@@ -930,7 +1004,10 @@ export function createStationEngine(
 
   function drawHud(t: number): void {
     const visible = [...people.values()].filter((p) => p.state !== "queued").length;
-    const head = "STASIUN " + visible + (totalDiamonds ? "  DIAMOND " + totalDiamonds : "") + "  " + clockStr(TOD);
+    // The room is the room and the platform is the platform. Reporting one as
+    // the other is how a widget ends up claiming 400 people are watching a
+    // station with four on it.
+    const head = formatAudience(audienceShown, visible) + (totalDiamonds ? "  DIAMOND " + totalDiamonds : "") + "  " + clockStr(TOD);
     plateOn(g, 3, 3, textW(head) + 6, 11, PLATE);
     txtOn(g, head, 6, 6, "#ffffff");
     const maxC = Math.max(14, Math.min(34, Math.floor((LW * 0.6) / 4)));
@@ -1066,6 +1143,17 @@ export function createStationEngine(
     TOD = cfg.pinnedHour ?? ((0.2 + secs / cfg.dayLen + todOffset) % 1 + 1) % 1;
     KFN = skyAt(TOD);
 
+    audienceShown = easeAudience(audienceShown, audienceReal, dt);
+    const tier = settledTier(bakedTier, audienceShown);
+    if (tier !== bakedTier) {
+      bakedTier = tier;
+      // Changing tier while a train is at the platform would leave a train of
+      // one length standing under a platform sized for another, so the change
+      // waits for the next service.
+      topUpAmbient();
+      trimAmbient();
+    }
+
     updateWorld(dt, t);
     for (const p of [...people.values()]) updatePerson(p, dt, t);
 
@@ -1093,6 +1181,9 @@ export function createStationEngine(
 
   function start(): void {
     ready = true;
+    // A station with nobody on it is a drawing, not a station. The background
+    // crowd starts at the smallest tier and grows with the room from there.
+    topUpAmbient();
     paintSky(scene, KFN);
     tick.text = fillers()[0];
     tick.x = LW;
@@ -1126,6 +1217,13 @@ export function createStationEngine(
       return {
         people: people.size,
         onPlatform: [...people.values()].filter((p) => p.state !== "queued").length,
+        ambient: [...people.values()].filter((p) => p.ambient).length,
+        real: [...people.values()].filter((p) => !p.ambient && p.state !== "queued").length,
+        audience: audienceReal,
+        audienceShown: Math.round(audienceShown),
+        tier: audienceTier(audienceShown).name,
+        tierIndex: bakedTier,
+        cars: train ? train.n : carsFor(LW, bakedTier),
         states: [...people.values()].reduce<Record<string, number>>((acc, p) => {
           acc[p.state] = (acc[p.state] ?? 0) + 1;
           return acc;

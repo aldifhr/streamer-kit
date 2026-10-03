@@ -85,7 +85,33 @@ export interface Passer {
  */
 export const HOLD_MAX = 8000;
 
-export const carsFor = (LW: number) => clamp(Math.floor((LW * 0.8) / (CAR_W + 2)), 2, 4);
+/**
+ * Carriages, by how full the room is.
+ *
+ * The longest train the platform can hold is a layout question — past about four
+ * cars the train hangs off both edges and stops reading as a train. How many it
+ * should be is not: a quiet room does not need a long train, and a busy one
+ * does, and nothing else in the scene carries the size of the audience.
+ */
+const TIER_CARS = [2, 2, 3, 3, 4];
+
+export const carsFor = (LW: number, tier = 2) => {
+  const room = clamp(Math.floor((LW * 0.8) / (CAR_W + 2)), 2, 4);
+  return clamp(TIER_CARS[clamp(tier, 0, TIER_CARS.length - 1)], 2, Math.max(2, room));
+};
+
+/** Seconds between services at each tier — a fuller room gets a busier station. */
+const TIER_GAP = [30, 26, 22, 18, 14];
+
+export const gapFor = (tier: number, min: number, max: number) => {
+  const t = TIER_GAP[clamp(tier, 0, TIER_GAP.length - 1)];
+  return [Math.min(min, t), Math.min(max, t)];
+};
+
+/** Background passengers on the platform, by tier. Not viewers. */
+const TIER_AMBIENT = [1, 3, 6, 10, 15];
+
+export const ambientFor = (tier: number) => TIER_AMBIENT[clamp(tier, 0, TIER_AMBIENT.length - 1)];
 export const trainLen = (n: number) => n * (CAR_W + 2) - 2;
 
 function carParts(role: TrainRole, scm: Scheme, light: string): Part[] {
@@ -179,10 +205,10 @@ export interface NewTrainOpts {
   text?: string;
 }
 
-export function newTrain(doc: Document, LW: number, dwellMs: number, opts?: NewTrainOpts): Train {
+export function newTrain(doc: Document, LW: number, dwellMs: number, opts?: NewTrainOpts, tier = 2): Train {
   const o = opts || {};
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-  const n = carsFor(LW);
+  const n = carsFor(LW, tier);
   const len = trainLen(n);
   const stop = R(LW / 2 - len / 2);
   const startX = dir > 0 ? -len - 8 : LW + 8;

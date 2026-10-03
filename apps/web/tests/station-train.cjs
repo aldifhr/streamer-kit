@@ -224,6 +224,38 @@ console.log("\npeople hold the doors open");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\nsize follows the room");
+{
+  // The platform can only hold so much train. The tier decides how much of it
+  // is actually used.
+  const roomy = 640;
+  const narrow = 200;
+  const lengths = [0, 1, 2, 3, 4].map((t) => train.carsFor(roomy, t));
+  check("a fuller room gets a longer train", lengths[0] < lengths[4], lengths.join(" -> "));
+  check("never below two cars", Math.min.apply(null, lengths) >= 2, lengths.join(" -> "));
+  check("never above four cars", Math.max.apply(null, lengths) <= 4, lengths.join(" -> "));
+  check("an out-of-range tier is clamped", train.carsFor(roomy, -3) === lengths[0] && train.carsFor(roomy, 99) === lengths[4]);
+
+  const narrowCars = [0, 1, 2, 3, 4].map((t) => train.carsFor(narrow, t));
+  check("a narrow platform is not overrun by a long train", Math.max.apply(null, narrowCars) <= 4, narrowCars.join(" -> "));
+  check("a narrow platform still gets a train", Math.min.apply(null, narrowCars) >= 2, narrowCars.join(" -> "));
+
+  const gaps = [0, 1, 2, 3, 4].map((t) => train.gapFor(t, 16, 30)[0]);
+  check("a fuller room gets a busier service", gaps[0] > gaps[4], gaps.join(" -> "));
+  check("a configured gap still wins over the tier", train.gapFor(0, 5, 8)[1] <= 8, JSON.stringify(train.gapFor(0, 5, 8)));
+
+  const ambient = [0, 1, 2, 3, 4].map((t) => train.ambientFor(t));
+  check("a fuller room gets a fuller platform", ambient[0] < ambient[4], ambient.join(" -> "));
+  check("even a quiet room is not empty", ambient[0] >= 1, ambient.join(" -> "));
+  check("ambient is clamped too", train.ambientFor(-1) === ambient[0] && train.ambientFor(99) === ambient[4]);
+
+  // A train built for a tier has to actually be that long.
+  const tr = train.newTrain(stubDoc, roomy, 14000, undefined, 4);
+  check("a new train honours its tier", tr.n === train.carsFor(roomy, 4), "n=" + tr.n);
+  check("and has two doors per car", tr.doors.length === 0);
+}
+
+// ---------------------------------------------------------------------------
 console.log("\nexpress trains");
 {
   const p = train.spawnPasser(stubDoc, LW, false);

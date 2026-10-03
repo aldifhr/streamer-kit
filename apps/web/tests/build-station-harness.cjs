@@ -32,6 +32,7 @@ const MODULES = [
   { name: "lib/widgets/city/font", ids: ["../city/font", "./font"] },
   { name: "lib/widgets/city/sprites", ids: ["../city/sprites", "./sprites"] },
   { name: "lib/widgets/city/scenery", ids: ["../city/scenery", "./scenery"] },
+  { name: "lib/widgets/city/audience", ids: ["../city/audience", "./audience"] },
   { name: "lib/widgets/station/config", ids: ["./config"] },
   { name: "lib/widgets/station/scene", ids: ["./scene"] },
   { name: "lib/widgets/station/train", ids: ["./train"] },
@@ -117,6 +118,16 @@ window.addEventListener("error", function (ev) { harnessFail(document.getElement
   engine.resize(cv.clientWidth, cv.clientHeight);
   engine.start();
 
+  // A fake room size, so the effect of the audience can be looked at without a
+  // live stream. The viewers query parameter puts N people in the room.
+  var fakeViewers = q.get("viewers");
+  if (fakeViewers !== null) {
+    var seqV = 0;
+    setInterval(function () {
+      engine.handle({ id: "v" + seqV++, seq: 0, ts: Date.now(), kind: "viewers", user: "", userId: "", value: "", meta: { count: +fakeViewers } });
+    }, 400);
+  }
+
   var NAMES = ["BUDI", "SARI", "DIMAS", "RINA", "ANDI", "PUTRI", "FAJAR", "NADIA", "YOGA", "MAYA", "RIZKY", "INTAN"];
   var seq = 0;
   function feed(kind, i, value, meta) {
@@ -152,6 +163,8 @@ window.addEventListener("error", function (ev) { harnessFail(document.getElement
     bar.innerHTML =
       "<b>" + s.trainPhase + "</b> open " + s.trainOpen + " doors " + s.doors +
       " &nbsp;|&nbsp; on platform <b>" + s.onPlatform + "</b> queued " + (s.states.queued || 0) +
+      " &nbsp;|&nbsp; room " + s.audienceShown + " " + s.tier + " cars " + s.cars +
+      " ambient " + s.ambient + " real " + s.real +
       " &nbsp;|&nbsp; passers " + s.passers + " sprites " + s.sprites + " 💎 " + s.diamonds +
       " &nbsp;|&nbsp; " + s.LW + "x" + s.LH;
   }

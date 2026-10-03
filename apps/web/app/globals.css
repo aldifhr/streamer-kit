@@ -342,17 +342,39 @@ body {
    and out of the way: it is a diagnostic, not part of the design. */
 .sk-notice {
   position: absolute;
-  left: 12px;
-  top: 12px;
-  max-width: 60ch;
-  padding: 8px 12px;
-  border: 1px solid #7f1d1d;
-  border-radius: 6px;
-  background: rgba(30, 6, 6, 0.88);
-  color: #fca5a5;
-  font: 500 14px/1.4 system-ui, sans-serif;
-  text-shadow: none;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 18px 12px;
+  border: 2px solid #fca5a5;
+  background: rgba(20, 6, 14, 0.92);
+  text-align: center;
   z-index: 10;
+  /* Chunky, unantialiased and letter-spaced, so it reads as part of the pixel
+     scene rather than as a browser alert dropped on top of one. The whole
+     overlay is drawn small and scaled up; this has to match or it looks pasted
+     on, which was half of why the old red box read as a bug in the overlay
+     rather than a stream that is not running. */
+  image-rendering: pixelated;
+  font-family: "Press Start 2P", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+.sk-notice-head {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.5;
+  color: #fca5a5;
+  text-shadow: 2px 2px 0 #450a0a;
+}
+
+.sk-notice-detail {
+  margin: 8px 0 0;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+  color: #a8a3b8;
 }
 
 @keyframes sk-in {

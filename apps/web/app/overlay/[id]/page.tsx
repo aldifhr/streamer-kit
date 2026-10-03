@@ -4,6 +4,7 @@ import { use, useEffect, useMemo } from "react";
 import { anchorTo } from "@/lib/alignment";
 import { globalVars, resolveSurface, styleProps } from "@/lib/css";
 import { useFeed } from "@/lib/feed";
+import { OfflineNotice } from "./OfflineNotice";
 import { resolve, type SceneConfig, type WidgetInstance } from "@/lib/scene";
 import { safeCustomCSS } from "@/lib/safe-css";
 import { widgetType } from "@/lib/widgets/registry";
@@ -74,8 +75,15 @@ export default function Scene({
   const widget = config?.widgets[0] ?? null;
 
   // A blank browser source is the hardest failure to diagnose, because OBS shows
-  // nothing to look at. So a hard error renders a small notice rather than
-  // staying silent — quietly saying why beats a void.
+  // nothing to look at. So a hard error renders a notice rather than staying
+  // silent — quietly saying why beats a void.
+  //
+  // What it says is split in two. The picture gets a short line about the
+  // situation; the raw socket string stays in the document title, which is where
+  // the person fixing it actually looks. Putting
+  // "Connection failed: TikTokLive v7.0.1 -> UserOfflineError" on the stream told
+  // the audience nothing and told whoever was watching it fail everything, in a
+  // box that looked like an overlay bug rather than a stream that is not running.
   useEffect(() => {
     if (feed.error) document.title = `StreamKit — ${feed.error}`;
   }, [feed.error]);
@@ -100,9 +108,7 @@ export default function Scene({
       ) : null}
 
       {feed.error ? (
-        <div className="sk-notice" role="status">
-          {feed.error}
-        </div>
+        <OfflineNotice error={feed.error} />
       ) : null}
     </div>
   );

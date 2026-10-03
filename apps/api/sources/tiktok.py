@@ -191,7 +191,22 @@ class TikTokSource:
 
         @self._client.on(RoomUserSeqEvent)
         async def on_viewers(event):
-            dispatch(self.overlay_id, Event(kind=VIEWERS, meta={"count": event.total_user}))
+            # `total` is how many people are in the room now. `total_user` is how
+            # many have been in it since the session began, and it only ever
+            # climbs — measured live at 627,555 against 19,682 on `join`, 31.9
+            # times apart, both rising. A city sized from a cumulative total reads
+            # METROPOLIS within minutes of any stream starting and keeps climbing
+            # for as long as it runs, which measures nothing.
+            #
+            # Both are sent: the header can show the running total as a stat, and
+            # anything that wants a session figure has one. `pop_str` rides along
+            # because it is the same number the room shows its own audience.
+            dispatch(self.overlay_id, Event(kind=VIEWERS, meta={
+                "count": event.total,
+                "total_user": event.total_user,
+                "popularity": event.popularity,
+                "pop_str": event.pop_str,
+            }))
 
         # Social events are registered as the concrete subclasses rather than
         # SocialEvent: TikTokLive matches handlers on the emitted class, and a

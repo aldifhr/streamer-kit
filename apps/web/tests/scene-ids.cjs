@@ -20,6 +20,7 @@ Module._load = function (request, ...rest) {
 };
 
 const { normaliseScene, makeWidget, countOf, SCENE_VERSION } = require(path.join(OUT, "lib", "scene.js"));
+const { WIDGET_TYPES } = require(path.join(OUT, "lib", "widgets", "registry.js"));
 const { newWidgetId } = require(path.join(OUT, "lib", "widgets", "types.js"));
 
 let passed = 0;
@@ -42,24 +43,30 @@ check("an id is usable as a DOM id", !/[^a-zA-Z0-9_-]/.test(newWidgetId("chat"))
 
 console.log("a config with duplicate ids is repaired on load");
 // This is what an old build wrote: the id counter restarted on every page load,
-// so two marathon widgets saved in different sessions could share an id. The
-// counter widgets key their state on it, so a duplicate means a shared total.
+// so two widgets saved in different sessions could share an id. The counter
+// widgets key their state on it, so a duplicate means a shared total.
+//
+// Marathon and streaks used to be the types here and were removed from the
+// registry. `normaliseScene` drops a widget whose type is no longer registered,
+// so this kept passing as long as it was the id de-duplication being tested —
+// which is exactly why it needed swapping for types that still ship rather than
+// being left to fail on a removed feature.
 const scene = normaliseScene({
   version: SCENE_VERSION,
   theme: "streamline",
   widgets: [
-    { type: "marathon", id: "marathon-1", x: 0.1, y: 0.1 },
-    { type: "marathon", id: "marathon-1", x: 0.5, y: 0.5 },
-    { type: "streaks", id: "streaks-1", x: 0.2, y: 0.2 },
+    { type: "goal", id: "goal-1", x: 0.1, y: 0.1 },
+    { type: "goal", id: "goal-1", x: 0.5, y: 0.5 },
+    { type: "social", id: "social-1", x: 0.2, y: 0.2 },
   ],
 });
 const sceneIds = scene.widgets.map((w) => w.id);
-check("all three widgets survive", scene.widgets.length === 3);
+check("all three widgets survive", scene.widgets.length === 3, `got ${scene.widgets.length}`);
 check("no two widgets share an id", new Set(sceneIds).size === sceneIds.length);
-check("the first duplicate keeps its id", sceneIds[0] === "marathon-1");
-check("the duplicate is given a new one", sceneIds[1] !== "marathon-1");
-check("an unaffected widget is untouched", sceneIds[2] === "streaks-1");
-check("countOf still sees both marathons", countOf(scene, "marathon") === 2);
+check("the first duplicate keeps its id", sceneIds[0] === "goal-1");
+check("the duplicate is given a new one", sceneIds[1] !== "goal-1");
+check("an unaffected widget is untouched", sceneIds[2] === "social-1");
+check("countOf still sees both goals", countOf(scene, "goal") === 2);
 
 console.log("a config with no ids at all still loads");
 const fresh = normaliseScene({
@@ -134,13 +141,30 @@ check("it has no widget list", !Array.isArray(stored.widgets));
 check("it round-trips back to the same widget", sceneFromWidget(stored).widgets[0].type === "astro");
 
 console.log("a new overlay is its widget at defaults");
-const freshOverlay = defaultWidgetConfig("viewers");
-check("it names the widget", freshOverlay.type === "viewers");
+// `viewers` was here and is gone from the registry. A widget type that no longer
+// exists must fall back rather than break, and that is now a reachable case
+// rather than a hypothetical one, so it is asserted directly below.
+const freshOverlay = defaultWidgetConfig("city");
+check("it names the widget", freshOverlay.type === "city");
 // Only overrides are stored, never the whole default bag: the defaults live in
 // the widget's registry entry, and copying them into every record is how a
 // default change used to leave existing overlays behind.
 check("it stores no style overrides for an untouched widget", Object.keys(freshOverlay.style).length === 0);
-check("loading it gives back that widget", normaliseScene(freshOverlay).widgets[0].type === "viewers");
+check("loading it gives back that widget", normaliseScene(freshOverlay).widgets[0].type === "city");
+
+console.log("an overlay saved with a widget this build does not have");
+{
+  // Every overlay here has been saved against a registry that used to be
+  // bigger. Five widgets were removed from it, so this is not hypothetical:
+  // anyone with an old config loading it today takes this path.
+  const stale = defaultWidgetConfig("marathon");
+  const scene = normaliseScene(stale);
+  check("it still produces a scene", Array.isArray(scene.widgets) && scene.widgets.length > 0,
+    JSON.stringify(scene.widgets));
+  check("falling back to something that ships",
+    scene.widgets.every((w) => WIDGET_TYPES[w.type] !== undefined),
+    JSON.stringify(scene.widgets.map((w) => w.type)));
+}
 
 console.log();
 if (process.exitCode) {

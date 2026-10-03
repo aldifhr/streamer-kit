@@ -6,29 +6,19 @@
  * feature — which was the failure mode of the flat config this replaced.
  */
 
-import { alertsWidget } from "./alerts";
 import { astroWidget } from "./astro/widget";
 import { chatWidget } from "./chat";
 import { cityWidget } from "./city/widget";
 import { donationJarWidget } from "./donationjar";
 import { goalWidget } from "./goal";
-import { marathonWidget } from "./marathon";
 import { socialWidget } from "./social";
-import { streaksWidget } from "./streaks";
-import { topGiftsWidget } from "./topgifts";
-import { viewersWidget } from "./viewers";
 import type { WidgetType } from "./types";
 
 export const WIDGET_TYPES: Record<string, WidgetType> = {
   chat: chatWidget,
-  alerts: alertsWidget,
-  viewers: viewersWidget,
   goal: goalWidget,
   astro: astroWidget,
   city: cityWidget,
-  streaks: streaksWidget,
-  "top-gifts": topGiftsWidget,
-  marathon: marathonWidget,
   "donation-jar": donationJarWidget,
   social: socialWidget,
 };
@@ -36,14 +26,9 @@ export const WIDGET_TYPES: Record<string, WidgetType> = {
 /** Registration order, which is also the order the "add widget" menu lists. */
 export const WIDGET_LIST: WidgetType[] = [
   chatWidget,
-  alertsWidget,
   astroWidget,
   cityWidget,
-  viewersWidget,
   goalWidget,
-  streaksWidget,
-  topGiftsWidget,
-  marathonWidget,
   donationJarWidget,
   socialWidget,
 ];

@@ -20,6 +20,7 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
 
 /**
  * A port nobody is using.
@@ -407,32 +408,32 @@ async function main() {
     check("an unconfigured gate refuses writes", anon.status === 503, `got ${anon.status}`);
   });
 
-  console.log("the poll is reachable without a session, so OBS can vote");
-  // The poll widget renders on /overlay/{id}, which OBS loads and which cannot
-  // log in. It votes through this proxy, so if the gate covered the poll the vote
-  // button would silently do nothing and the backend's open GET /vote would never
-  // be reached.
-  await withServer({}, async () => {
-    // This one is not optional. The overlay fetches its own config from here, and
-    // when it was gated the page 401'd, fell back to the sample scene, and the
-    // stream showed someone else's goal bar plus a red "Overlay not found".
-    const own = await req("/api/overlays/ov1");
-    check("an overlay can read its own config", own.status === 502, `got ${own.status}`);
 
+  console.log("the poll exemption is gone with the poll");
+  // The read and the vote used to be exempt from the gate so a browser source
+  // could answer a poll without a session. The vote was a GET on purpose and the
+  // backend kept no voter identity, so it was a write anyone could repeat — and
+  // when the widget went, the exemption outlived it. An anonymous write with no
+  // user left is not worth keeping.
+  await withServer({}, async () => {
+    // What matters is that neither one can succeed without a session, not which
+    // layer refuses it: the backend no longer has the route at all, so the
+    // status is an implementation detail of whichever end answers first.
     const read = await req("/api/polls/ov1");
-    check("reading a poll needs no session", read.status === 502, `got ${read.status}`);
+    check("there is no anonymous read of a poll", read.status >= 400, `got ${read.status}`);
 
     const vote = await req("/api/polls/ov1/vote?choice=0");
-    check("voting needs no session", vote.status === 502, `got ${vote.status}`);
+    check("and no anonymous vote", vote.status >= 400, `got ${vote.status}`);
 
-    // The exemption is for the read and the vote, not for the writes. Creating a
-    // poll is how an overlay gets a question, and it stays behind the gate.
-    const create = await req("/api/polls/ov1", { method: "POST", body: { question: "Q", options: ["a"] } });
-    check("creating a poll still needs a session", create.status === 401, `got ${create.status}`);
+    // And nothing in the proxy exempts that path any more, so re-adding a poll
+    // widget would not silently restore an open write.
+    const route = fs.readFileSync(
+      path.resolve(__dirname, "../app/api/[...path]/route.ts"), "utf8");
+    check("the proxy carries no poll exemption", !route.includes("/api/polls"),
+      "route.ts exempts a poll path again");
+  });
 
-    const drop = await req("/api/polls/ov1", { method: "DELETE" });
-    check("deleting a poll still needs a session", drop.status === 401, `got ${drop.status}`);
-
+  await withServer({}, async () => {
     // And it is scoped: a list of every overlay stays closed, and so does a write
     // to a single overlay even though its read is open.
     const list = await req("/api/overlays");

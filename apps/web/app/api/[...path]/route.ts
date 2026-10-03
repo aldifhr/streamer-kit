@@ -68,7 +68,6 @@ function isPublicOverlayRead(request: NextRequest): boolean {
   const path = request.nextUrl.pathname;
   if (request.method === "GET") {
     if (/^\/api\/overlays\/[^/]+$/.test(path)) return true;
-    if (/^\/api\/polls\/[^/]+(?:\/vote)?$/.test(path)) return true;
     return false;
   }
   // `POST /api/overlay-connect/<id>` is here for the same reason the reads are.

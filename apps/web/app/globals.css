@@ -27,6 +27,11 @@ body {
 /* The scene. Widgets are absolutely positioned inside it by the renderer, so
    the scene itself does no layout beyond clipping. */
 .sk-root {
+  /* A size container for the overlay, so notices and labels can size themselves
+     against the source width rather than the browser window. It belongs here and
+     not on the notice itself: an element that is both a size container and
+     shrink-to-fit for its own text collapses, which is exactly what happened. */
+  container-type: inline-size;
   position: fixed;
   inset: 0;
   overflow: hidden;
@@ -345,8 +350,12 @@ body {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  padding: 14px 18px 12px;
-  border: 2px solid #fca5a5;
+  /* Sized for the source, not for a browser window. The city canvas is drawn at
+     640x289 and scaled up, so the scene's own text lands around 20px on a
+     1280-wide capture; at 12px this read as a small label stuck to a corner
+     rather than the thing the stream is currently doing. */
+  padding: 30px 38px 26px;
+  border: 4px solid #fca5a5;
   background: rgba(20, 6, 14, 0.92);
   text-align: center;
   z-index: 10;
@@ -361,20 +370,23 @@ body {
 
 .sk-notice-head {
   margin: 0;
-  font-size: 12px;
+  /* Proportional to the source width, so it reads the same on a 1280 capture
+     and on a 2560 one instead of shrinking into a corner. */
+  font-size: clamp(22px, 2.6cqw, 52px);
   font-weight: 700;
-  letter-spacing: 0.12em;
-  line-height: 1.5;
+  letter-spacing: 0.1em;
+  line-height: 1.35;
   color: #fca5a5;
-  text-shadow: 2px 2px 0 #450a0a;
+  text-shadow: 4px 4px 0 #450a0a;
 }
 
 .sk-notice-detail {
-  margin: 8px 0 0;
-  font-size: 9px;
+  margin: 18px 0 0;
+  font-size: clamp(11px, 1.15cqw, 22px);
   letter-spacing: 0.08em;
-  line-height: 1.6;
-  color: #a8a3b8;
+  line-height: 1.5;
+  color: #b9b3c9;
+  text-shadow: 2px 2px 0 #2a0a12;
 }
 
 @keyframes sk-in {

@@ -47,6 +47,53 @@ export function audienceTier(count: number): { index: number; name: string; from
   return { index, name: AUDIENCE_TIERS[index].name, from: AUDIENCE_TIERS[index].from };
 }
 
+/**
+ * How far past a boundary the audience has to move before the city changes.
+ *
+ * Found by running the live overlay with `?debug=1` and reading its own log: a
+ * room sitting on the KAMPUNG/KELURAHAN boundary produced 9, 10, 11, 10, 9, 11
+ * in a few seconds, and the tier log read KAMPUNG → KELURAHAN → KAMPUNG. Every
+ * crossing re-lays the whole street — new buildings, every resident repositioned,
+ * every vehicle dropped — so a room that wobbled by one viewer rebuilt the city
+ * several times a minute. Two reports that looked unrelated had one cause.
+ *
+ * The margin is small on purpose. Large enough that ordinary movement around a
+ * threshold does not count, small enough that a room genuinely emptying still
+ * reaches the right tier within a few viewers.
+ */
+export const TIER_HYSTERESIS = 3;
+
+/**
+ * The tier to actually use, given the one in force and the audience now.
+ *
+ * Kept separate from `audienceTier` on purpose: that one answers "what does this
+ * number mean on its own", which is what the header and the log want. This
+ * answers "should the city change", which is a different question and needs to
+ * know where it started.
+ */
+export function settledTier(currentIndex: number, count: number): number {
+  const n = Number.isFinite(count) && count > 0 ? count : 0;
+  const here = Math.max(0, Math.min(currentIndex, AUDIENCE_TIERS.length - 1));
+
+  // Up first: one crossing per call, so a jump past several tiers walks up
+  // rather than teleporting, and the log gets a line for each step.
+  const up = AUDIENCE_TIERS[here + 1];
+  if (up && n >= up.from + TIER_HYSTERESIS) return here + 1;
+
+  // Down only once the audience is below this tier's own floor, by the margin.
+  // Dropping straight to the tier the number implies would defeat the point.
+  //
+  // Walked with a loop, not by recursing into this function: a recursive step
+  // has to re-add the margin to preserve the test, and that margin then blocks
+  // the next step down as well, so the walk stopped one tier short every time
+  // and a room that emptied settled at KELURAHAN instead of KAMPUNG.
+  let down = here;
+  while (down > 0 && n < AUDIENCE_TIERS[down].from - TIER_HYSTERESIS) {
+    down -= 1;
+  }
+  return down;
+}
+
 /** The next tier's threshold, or null at the top. */
 export function nextThreshold(count: number): number | null {
   const n = Number.isFinite(count) && count > 0 ? count : 0;

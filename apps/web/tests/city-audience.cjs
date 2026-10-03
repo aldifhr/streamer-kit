@@ -23,6 +23,8 @@ const {
   easeAudience,
   formatAudience,
   nextThreshold,
+  settledTier,
+  TIER_HYSTERESIS,
 } = require(path.join(OUT, "audience.js"));
 
 /** Runs the easing for a number of seconds at 60fps, since the rates are per second. */
@@ -149,6 +151,89 @@ console.log("the HUD says which number is which");
 
 console.log();
 assert.equal(typeof audienceTier, "function");
+if (process.exitCode) {
+  console.log("FAILED");
+} else {
+  console.log(`all passed (${passed} assertions)`);
+}
+// ---------------------------------------------------------------------------
+console.log("a tier does not flicker on its own threshold");
+{
+  // Read off a live overlay running with ?debug=1: a room on the
+  // KAMPUNG/KELURAHAN boundary produced exactly this, in this order.
+  const live = [9, 10, 11, 10, 9, 11, 10, 9];
+  const margin = TIER_HYSTERESIS;
+
+  let tier = 0;
+  const flat = [];
+  for (const n of live) flat.push(audienceTier(n).index);
+  const hys = [];
+  for (const n of live) {
+    tier = settledTier(tier, n);
+    hys.push(tier);
+  }
+
+  const changes = (arr) => arr.filter((v, i) => i > 0 && v !== arr[i - 1]).length;
+  check("reading the number flat flips the tier " + changes(flat) + " times",
+    changes(flat) > 3, `flat: ${flat.join(",")}`);
+  check("settling it flips far fewer", changes(hys) <= 1, `settled: ${hys.join(",")}`);
+  // The wobble never gets past the threshold plus its margin, so the city should
+  // not have moved at all. My first expectation here was that it should end up in
+  // KELURAHAN — which is the flicker itself, not the fix.
+  check("and the city never moved at all", hys.every((v) => v === 0),
+    `settled: ${hys.join(",")}`);
+
+  // A room genuinely past the threshold still goes, and stays.
+  // 40 is KELURAHAN, not KECAMATAN — 50 is where that starts. And the walk is one
+  // step per call, so a big room needs a few frames to climb, which is what puts
+  // a line in the log for each step.
+  let grown = 0;
+  for (const n of live) grown = settledTier(grown, 40);
+  check("a room past the boundary climbs to KELURAHAN", grown === 1, `got ${grown}`);
+  for (let i = 0; i < 10; i += 1) grown = settledTier(grown, 41);
+  check("and does not come back down while it holds there", grown === 1, `got ${grown}`);
+
+  let high = 0;
+  for (let i = 0; i < 12; i += 1) high = settledTier(high, 60);
+  check("a room of 60 walks up to KECAMATAN one step at a time", high === 2, `got ${high}`);
+  for (let i = 0; i < 6; i += 1) high = settledTier(high, 56);
+  check("and stays there while it holds", high === 2, `got ${high}`);
+
+  // The margin has to be worth its cost: a room that empties still gets there.
+  let empty = 1;
+  for (let i = 0; i < 20; i += 1) empty = settledTier(empty, 0);
+  check("a room that empties still reaches the bottom tier", empty === 0, `got ${empty}`);
+
+  // And a room that grows must still climb.
+  let big = 0;
+  for (let i = 0; i < 40; i += 1) big = settledTier(big, 3000);
+  check("a full room still reaches the top tier", big === 4, `got ${big}`);
+
+  // Climbing is one step at a time so the log gets a line per step.
+  let climbing = 0;
+  const steps = [];
+  for (let i = 0; i < 40; i += 1) {
+    climbing = settledTier(climbing, 3000);
+    steps.push(climbing);
+  }
+  check("no step skips a tier", steps.every((v, i) => i === 0 || v === steps[i - 1] || v === steps[i - 1] + 1),
+    steps.join(","));
+  check("and it is monotonic", steps.every((v, i) => i === 0 || v >= steps[i - 1]), steps.join(","));
+
+  check("the margin is a real number", margin >= 1 && margin <= 10, `got ${margin}`);
+}
+
+console.log("the first tier has nothing below it");
+{
+  check("a down step from KAMPUNG stays put", settledTier(0, 0) === 0);
+  // An out-of-range index is clamped to the top, then walked back down like any
+  // other starting point — which is the path that used to stop one tier short.
+  check("an unknown index is clamped, then settled", settledTier(99, 0) === 0,
+    `got ${settledTier(99, 0)}`);
+  check("and a negative one climbs when the room is big",
+    settledTier(-3, 100) === 1, `got ${settledTier(-3, 100)}`);
+}
+console.log();
 if (process.exitCode) {
   console.log("FAILED");
 } else {

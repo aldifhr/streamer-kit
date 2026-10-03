@@ -60,7 +60,7 @@ import type { MissionGoal } from "./missions";
 import { createMayor, ESCORT, MIN_DIAMONDS as MAYOR_MIN } from "./mayor";
 import { drawDecorations } from "./decor";
 import type { Weather } from "./weather";
-import { AUDIENCE_TIERS, audienceGrowth, audienceTier, easeAudience, formatAudience } from "./audience";
+import { AUDIENCE_TIERS, audienceGrowth, audienceTier, easeAudience, formatAudience, settledTier } from "./audience";
 import { createInspector } from "./inspector";
 
 interface Resident {
@@ -1545,7 +1545,11 @@ export function createCityEngine(opts: CityEngineOptions): CityEngine {
     // A tier change re-lays the street: frontage widths, storeys, alley gaps and
     // lamp count all differ per tier, and none of them can be adjusted in place
     // because they are baked. Crossing one is rare, so the cost is irrelevant.
-    const tier = audienceTier(audienceShown).index;
+    // Which tier the city should be, given where it already is. Not what the
+    // number means on its own: the boundary between KAMPUNG and KELURAHAN is 10,
+    // and a live room sits on it often enough that reading it flat rebuilt the
+    // whole street several times a minute.
+    const tier = settledTier(bakedTier, audienceShown);
     if (ready && tier !== bakedTier) {
       const from = AUDIENCE_TIERS[bakedTier]?.name ?? "—";
       const to = AUDIENCE_TIERS[tier].name;

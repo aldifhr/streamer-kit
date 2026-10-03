@@ -36,6 +36,12 @@ CLIENT_OVERFLOW_STRIKES = 50
 #: so one stalled OBS cannot delay anyone else and is dropped on its own clock.
 SEND_TIMEOUT_S = 5.0
 
+#: How long a writer waits on an empty queue before checking whether a viewer
+#: count is being held back. Without this the held count is only ever sent when
+#: something else arrives, so a stream with an audience and no chat would never
+#: report its audience at all.
+VIEWER_FLUSH_S = 1.0
+
 
 class Hub:
     def __init__(self) -> None:
@@ -56,6 +62,17 @@ class Hub:
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._writers: dict[str, asyncio.Task[None]] = {}
         self._strikes: dict[str, int] = {}
+        # The newest viewer count per client, held outside the queue.
+        #
+        # It used to be coalesced *inside* the queue, which meant asking
+        # `qsize()` on every event for every client and, when the oldest item was
+        # a comment rather than a viewer, putting it back and asking again. That
+        # scan wedged the whole event loop — py-spy caught it parked in
+        # `qsize()` while every other client starved, which presented as the
+        # whole API going dead while the backend still logged events. Holding
+        # the count in a slot of its own is O(1), cannot reorder the queue, and
+        # cannot block: the newest number is simply the one that gets sent.
+        self._held_viewers: dict[str, dict[str, Any]] = {}
 
     async def connect(self, websocket: WebSocket, client_type: str, overlay_id: str | None = None) -> str:
         await websocket.accept()
@@ -75,6 +92,7 @@ class Hub:
         self.customizer_clients.discard(client_id)
         self._queues.pop(client_id, None)
         self._strikes.pop(client_id, None)
+        self._held_viewers.pop(client_id, None)
         task = self._writers.pop(client_id, None)
         if task is not None:
             task.cancel()
@@ -82,15 +100,30 @@ class Hub:
     async def _writer(self, client_id: str, ws: WebSocket) -> None:
         """Drain one client's queue, on that client's own clock."""
         queue = self._queues[client_id]
+
+        async def send(payload: dict[str, Any]) -> None:
+            # Serialised on the way out, not on the way in: a viewer count held
+            # for coalescing must not have been encoded already.
+            await asyncio.wait_for(
+                ws.send_text(json.dumps(payload, ensure_ascii=False)),
+                timeout=SEND_TIMEOUT_S,
+            )
+
         while True:
-            message = await queue.get()
             try:
-                # Serialised on the way out, not on the way in: a queued viewer
-                # count that gets coalesced must not have been encoded already.
-                await asyncio.wait_for(
-                    ws.send_text(json.dumps(message, ensure_ascii=False)),
-                    timeout=SEND_TIMEOUT_S,
-                )
+                message = await asyncio.wait_for(queue.get(), timeout=VIEWER_FLUSH_S)
+            except asyncio.TimeoutError:
+                # Nothing queued. If an audience is being held back, this is the
+                # only moment it can ever leave, so it has to be checked.
+                held = self._held_viewers.pop(client_id, None)
+                if held is None:
+                    continue
+                message = held
+            except asyncio.CancelledError:
+                raise
+
+            try:
+                await send(message)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -98,6 +131,18 @@ class Hub:
                 # long enough to time out. Either way it is not coming back.
                 self.disconnect(client_id)
                 return
+
+            # The queue is drained, so anything held back can go now, and it is
+            # the newest count rather than the oldest.
+            held = self._held_viewers.pop(client_id, None)
+            if held is not None:
+                try:
+                    await send(held)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.disconnect(client_id)
+                    return
 
     def _send(self, client_id: str, message: dict[str, Any]) -> None:
         """Hand a message to one client without waiting for it.
@@ -117,24 +162,22 @@ class Hub:
         if queue is None:
             return
 
-        coalesce = message.get("type") == "viewers"
-        while True:
-            try:
-                if coalesce and queue.qsize() > 0:
-                    # Replace the oldest queued viewer count rather than adding
-                    # another one behind it.
-                    dropped = queue.get_nowait()
-                    if dropped.get("type") != "viewers":
-                        queue.put_nowait(dropped)
-                        continue
-                queue.put_nowait(message)
-                self._strikes[client_id] = 0
-                return
-            except asyncio.QueueFull:
-                self._strikes[client_id] = self._strikes.get(client_id, 0) + 1
-                if self._strikes[client_id] >= CLIENT_OVERFLOW_STRIKES:
-                    self.disconnect(client_id)
-                return
+        if message.get("type") == "viewers":
+            # Held, not queued. The queue is for things that must all arrive in
+            # order; a viewer count is only ever true as of now, so the newest
+            # one supersedes every older one and there is no reason to give it a
+            # place in line behind a backlog of comments.
+            self._held_viewers[client_id] = message
+            self._strikes[client_id] = 0
+            return
+
+        try:
+            queue.put_nowait(message)
+            self._strikes[client_id] = 0
+        except asyncio.QueueFull:
+            self._strikes[client_id] = self._strikes.get(client_id, 0) + 1
+            if self._strikes[client_id] >= CLIENT_OVERFLOW_STRIKES:
+                self.disconnect(client_id)
 
     def _targets(self, client_type: str | None, overlay_id: str | None) -> set[str]:
         """Who should receive this message.

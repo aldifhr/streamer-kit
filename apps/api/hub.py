@@ -168,7 +168,14 @@ class Hub:
             # one supersedes every older one and there is no reason to give it a
             # place in line behind a backlog of comments.
             self._held_viewers[client_id] = message
-            self._strikes[client_id] = 0
+            # The strike counter is deliberately left alone here. It exists to
+            # answer "is this client draining?", and an audience update answers
+            # nothing about that — it never touches the queue. Resetting it meant
+            # a client with a permanently full queue and a stopped writer was
+            # forgiven every minute by a number that arrived on its own clock,
+            # so a threshold of fifty was really fifty overflows with no viewer
+            # count in between, and a wedged OBS on a slow room was never
+            # dropped at all.
             return
 
         try:

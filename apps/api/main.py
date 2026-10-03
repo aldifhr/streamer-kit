@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 import events
 import store
+from watchdog import LivenessWatchdog
 from events import ALERT, Event
 from hub import OVERLAY, hub
 from sources import TikTokSource
@@ -59,6 +60,11 @@ if _LEVEL != "NONE":
 sources: dict[str, TikTokSource] = {}
 
 
+#: Started once for the process. A watchdog that started per lifespan cycle would
+#: leave a thread behind every reload.
+liveness = LivenessWatchdog()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Re-aim every overlay that was pointed at a room when the process last went
@@ -70,7 +76,14 @@ async def lifespan(app: FastAPI):
     # for it to be acted on at boot. A room that fails to come back is logged and
     # left alone: it must not stop the others, and it must not crash the API.
     await restore_sources()
+
+    # Watched from a thread, because the failure it exists for is one the loop
+    # cannot report: a backend that stops yielding answers nothing and writes
+    # nothing, and the only evidence available is a stack taken from outside it.
+    liveness.start()
+
     yield
+    liveness.stop()
     for source in list(sources.values()):
         await source.stop()
     sources.clear()

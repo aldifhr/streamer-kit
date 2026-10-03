@@ -9,8 +9,10 @@ import io
 import logging
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `apps/api`, not this directory: the modules under test live one level up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import eventlog  # noqa: E402
 

@@ -9,7 +9,7 @@
     "dev:api": "cd apps/api && python main.py",
     "build": "cd apps/web && bun run build",
     "start": "cd apps/web && bun run start",
-    "test:api": "cd apps/api && python test_api.py",
+    "test:api": "apps/api/.venv/bin/python -u apps/api/tests/run_all.py",
     "test:astro": "tsc -p apps/web/tests/tsconfig.engine.json && node apps/web/tests/astro-engine.cjs",
     "test:astro-consume": "tsc -p apps/web/tests/tsconfig.consume.json && node apps/web/tests/astro-consume.cjs",
     "test:registry": "tsc -p apps/web/tests/tsconfig.registry.json && node apps/web/tests/widget-registry.cjs",

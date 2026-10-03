@@ -12,7 +12,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# `apps/api`, not this directory: the modules under test live one level up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Point the store at a scratch file before main imports it.
 _tmp = Path(tempfile.mkdtemp())

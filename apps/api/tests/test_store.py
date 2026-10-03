@@ -18,7 +18,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# `apps/api`, not this directory: the modules under test live one level up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _tmp = Path(tempfile.mkdtemp())
 os.environ["STREAMKIT_CONFIG_DIR"] = str(_tmp)

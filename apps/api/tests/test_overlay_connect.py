@@ -15,9 +15,11 @@ stream.
 
 import os
 import sys
+from pathlib import Path
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `apps/api`, not this directory: the modules under test live one level up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import main  # noqa: E402
 import store  # noqa: E402
